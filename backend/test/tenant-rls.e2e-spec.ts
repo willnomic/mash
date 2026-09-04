@@ -10,66 +10,71 @@ const admin = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
-describe('Tenant · Row-Level Security (D-012)', () => {
-  let tenantA: { id: string; name: string };
-  let tenantB: { id: string; name: string };
+describe('Tenant · Row-Level Security (D-012, exceção de leitura em D-029)', () => {
+  let tenantA: { id: string; name: string; slug: string };
+  let tenantB: { id: string; name: string; slug: string };
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Tenant"`;
+    await admin.$executeRaw`TRUNCATE TABLE "Tenant" CASCADE`;
     tenantA = await admin.tenant.create({
-      data: { id: uuidv7(), name: 'Transportadora A' },
+      data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
     });
     tenantB = await admin.tenant.create({
-      data: { id: uuidv7(), name: 'Transportadora B' },
+      data: { id: uuidv7(), name: 'Transportadora B', slug: 'transportadora-b' },
     });
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Tenant"`;
+    await admin.$executeRaw`TRUNCATE TABLE "Tenant" CASCADE`;
     await admin.$disconnect();
     await base.$disconnect();
   });
 
-  it('não enxerga dado de outro tenant', async () => {
-    const tenants = await forTenant(tenantA.id).tenant.findMany();
-
-    expect(tenants).toHaveLength(1);
-    expect(tenants.map((t) => t.id)).toEqual([tenantA.id]);
-    expect(tenants.some((t) => t.id === tenantB.id)).toBe(false);
-  });
-
-  it('sem tenant definido, não retorna nada', async () => {
+  it('leitura é pública, mesmo sem tenant definido na sessão (D-029)', async () => {
     const tenants = await base.tenant.findMany();
 
-    expect(tenants).toHaveLength(0);
+    expect(tenants).toHaveLength(2);
+    expect(tenants.map((t) => t.id).sort()).toEqual(
+      [tenantA.id, tenantB.id].sort(),
+    );
   });
 
-  it('protege também consulta crua', async () => {
-    const rows =
-      await forTenant(tenantA.id).$queryRaw`SELECT * FROM "Tenant"`;
+  it('leitura pública também vale para consulta crua', async () => {
+    const rows = await base.$queryRaw`SELECT * FROM "Tenant"`;
 
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
   });
 
-  it('impede gravar no tenant alheio', async () => {
+  it('resolve slug -> tenant sem nenhum tenant definido na sessão', async () => {
+    const found = await base.tenant.findUnique({
+      where: { slug: tenantA.slug },
+    });
+
+    expect(found?.id).toBe(tenantA.id);
+  });
+
+  it('impede criar tenant com id diferente do tenant da sessão', async () => {
     await expect(
       forTenant(tenantA.id).tenant.create({
-        data: { id: uuidv7(), name: 'Tenant forjado' },
+        data: { id: uuidv7(), name: 'Tenant forjado', slug: 'forjado' },
       }),
     ).rejects.toThrow();
   });
 
-  it('toda tabela com tenantId (ou id como fronteira) tem RLS forçado', async () => {
-    const unprotected = await admin.$queryRaw<{ relname: string }[]>`
-      SELECT c.relname
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public'
-        AND c.relkind = 'r'
-        AND c.relname IN ('Tenant')
-        AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
-    `;
+  it('impede atualizar tenant alheio', async () => {
+    await expect(
+      forTenant(tenantA.id).tenant.update({
+        where: { id: tenantB.id },
+        data: { name: 'Nome adulterado' },
+      }),
+    ).rejects.toThrow();
+  });
 
-    expect(unprotected).toEqual([]);
+  it('impede apagar tenant alheio', async () => {
+    await expect(
+      forTenant(tenantA.id).tenant.delete({
+        where: { id: tenantB.id },
+      }),
+    ).rejects.toThrow();
   });
 });

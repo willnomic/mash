@@ -715,6 +715,37 @@ urgente que qualquer decisão técnica tomada até aqui.
 
 ---
 
+## D-029 · Identificação do tenant no login
+**Status:** Fechada
+
+O login pede três campos: `slug` da transportadora, e-mail e senha. Não é possível
+resolver o tenant só por e-mail+senha porque a política de RLS do `User` (D-012) exige
+`app.current_tenant_id` já definido na sessão — e antes do login não há tenant nenhum
+definido. É ovo-e-galinha: para autenticar, a consulta precisaria já saber o tenant; para
+saber o tenant, precisaria consultar sem RLS.
+
+**Alternativas recusadas:**
+- **Role de banco com `BYPASSRLS`** para a consulta de login. Resolveria, mas abre um
+  segundo caminho deliberado de furar RLS — e um precedente é perigoso: a próxima pessoa
+  com pressa reusa o mesmo role "só dessa vez" para outra coisa, e o guarda do D-012 vira
+  suíço.
+- **E-mail globalmente único**, resolvendo o tenant pelo próprio e-mail. Rejeitado porque
+  a mesma pessoa pode atender mais de uma transportadora (ex.: o sócio consultor —
+  contexto.md) — `@@unique([tenantId, email])` foi decisão deliberada, não esquecimento.
+
+**Consequência para o `Tenant` (D-012):** a política original de `Tenant` (linha só
+enxerga a si mesma, `id` como fronteira) tinha o mesmo problema — bloqueava até a leitura
+de slug pré-login. Trocada por política **por comando**: `SELECT` público (`USING
+(true)`) — nome e slug não são dado sensível — e `INSERT`/`UPDATE`/`DELETE` continuam
+isolados ao próprio tenant. É a única tabela do sistema com essa exceção; não é padrão a
+copiar para tabela nova. Detalhe em `docs/d012-multi-tenant-rls.md`.
+
+**Formato do slug:** minúsculo, sem espaço, reforçado por `CHECK` no banco
+(`^[a-z0-9]+(-[a-z0-9]+)*$`), não só validação na aplicação — mesmo critério de D-012 e
+D-014: o banco garante, a aplicação não precisa lembrar.
+
+---
+
 ## Validado em campo
 
 Respondido pelo sócio, com base nas duas transportadoras da consultoria:

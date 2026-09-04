@@ -190,20 +190,76 @@ Use `AsyncLocalStorage`, **não** providers com escopo `REQUEST`. Escopo de requ
 contamina toda a cadeia de dependências acima dele e degrada o desempenho da
 aplicação inteira.
 
-```ts
-// tenant.middleware.ts
-@Injectable()
-export class TenantMiddleware implements NestMiddleware {
-  constructor(private readonly cls: ClsService) {}
+**Correção 04/09/2026:** a versão original deste passo tinha a ordem do pipeline do
+Nest invertida. `NestMiddleware` roda **antes** de qualquer guard (Middleware → Guards →
+Interceptors → Pipes → Handler) — um `TenantMiddleware` lendo `req.user?.tenantId` "já
+validado no guard" nunca funcionaria, porque nesse ponto nenhum guard rodou ainda. A
+peça que decodifica e valida o JWT precisa **ser** o guard, não um middleware que
+pressupõe um. Verificado ao implementar o login (D-029): substituído por um
+`CanActivate` global, registrado como `APP_GUARD`, com uma exceção explícita
+(`@Public()` + `Reflector`) para a rota de login — que roda antes de existir token
+nenhum. O `ClsModule.forRoot({ middleware: { mount: true } })` continua sendo
+middleware (é só o que estabelece o contexto do `AsyncLocalStorage`); quem define
+`tenantId` dentro desse contexto é o guard.
 
-  use(req: Request, _res: Response, next: NextFunction) {
-    const tenantId = req.user?.tenantId          // vem do JWT, validado no guard
-    if (!tenantId) throw new UnauthorizedException()
-    this.cls.set('tenantId', tenantId)
-    next()
+**Outra armadilha verificada:** `ClsModule.forRoot(...)` **não é global por padrão**
+nesta versão do `nestjs-cls` — sem `global: true`, `ClsService` só resolve dentro do
+módulo onde `forRoot` foi chamado (tipicamente `AppModule`), e qualquer módulo novo que
+injete `ClsService` (como o `TenantGuard`/`TenantPrisma`) precisaria se lembrar de
+reimportar `ClsModule` também. Mesma classe de risco que o RLS existe para evitar —
+por isso `global: true` sempre, registrado uma única vez:
+
+```ts
+ClsModule.forRoot({ global: true, middleware: { mount: true } })
+```
+
+```ts
+// public.decorator.ts
+export const IS_PUBLIC_KEY = 'isPublic'
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true)
+```
+
+```ts
+// tenant.guard.ts
+@Injectable()
+export class TenantGuard implements CanActivate {
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly cls: ClsService,
+    private readonly reflector: Reflector,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ])
+    if (isPublic) return true
+
+    const req = context.switchToHttp().getRequest<Request>()
+    const token = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : undefined
+    if (!token) throw new UnauthorizedException('Token ausente')
+
+    const payload = await this.jwt
+      .verifyAsync<JwtPayload>(token)
+      .catch(() => {
+        throw new UnauthorizedException('Token inválido')
+      })
+
+    this.cls.set('tenantId', payload.tenantId)
+    this.cls.set('userId', payload.sub)
+    this.cls.set('role', payload.role)
+
+    return true
   }
 }
 ```
+
+Registrado globalmente (`{ provide: APP_GUARD, useClass: TenantGuard }`), não por rota —
+esquecer de proteger uma rota nova não deveria ser possível; só a exceção explícita
+(`@Public()`) libera.
 
 ```ts
 // tenant-prisma.service.ts
@@ -312,6 +368,20 @@ o erro que ele pega é o único que se repete a cada nova tabela — dezenas de 
 longo de um ano, sempre com pressa.
 
 ---
+
+## Exceção: leitura pública (Tenant, D-029)
+
+`Tenant` é a única tabela do sistema com política de leitura pública (`FOR SELECT USING
+(true)`), em vez de escopada ao próprio tenant. Motivo: o login precisa resolver
+`slug` → `tenantId` **antes** de existir `app.current_tenant_id` na sessão — a política
+padrão bloquearia até essa leitura pré-autenticação. Escrita (`INSERT`/`UPDATE`/`DELETE`)
+continua isolada ao próprio tenant, com políticas separadas por comando.
+
+**Não é o padrão a copiar.** Qualquer tabela nova volta à política única de sempre
+(`USING`+`WITH CHECK` iguais, escopada ao tenant). `Tenant` abre exceção porque carrega
+só metadado não sensível (nome, slug) e porque é a única tabela que precisa ser
+consultável antes de o cliente estar autenticado. Detalhe da decisão em
+`docs/decisoes.md`, D-029.
 
 ## Índices
 

@@ -12,6 +12,40 @@ datasource db {
 model Tenant {
   id        String   @id @db.Uuid
   name      String
+  // Identifica o tenant no login, antes de existir tenant na sessão
+  // (D-029) — não é a chave primária (D-015: UUID nunca aparece pro
+  // operador). Formato (minúsculo, sem espaço) é reforçado por CHECK no
+  // banco, não só validado na aplicação.
+  slug      String   @unique @db.VarChar(63)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  users     User[]
+}
+
+// Papel define o que se pode fazer (D-009) — lógica separada de tenant, que
+// define quais dados existem (D-012). Nunca misturar as duas numa consulta.
+// Valores em inglês (D-007): são cargos genéricos, sem significado legal ou
+// setorial brasileiro, então não são exceção à regra do inglês.
+enum UserRole {
+  OPERATOR
+  MANAGER
+  FINANCE
+  ADMIN
+}
+
+model User {
+  id           String   @id @db.Uuid
+  tenantId     String   @db.Uuid
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  email        String
+  passwordHash String
+  name         String
+  role         UserRole
+  // Cadastro nunca tem hard delete (D-017): inativar é estado, não remoção.
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([tenantId, email])
+  @@index([tenantId, active])
 }
