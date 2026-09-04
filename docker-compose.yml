@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mash_owner
+      POSTGRES_PASSWORD: mash_owner_dev_only
+      POSTGRES_DB: mash
+    ports:
+      # 5433 no host: a máquina já tem um PostgreSQL nativo ocupando a 5432.
+      - '5433:5432'
+    volumes:
+      - mash_pgdata:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mash_owner -d mash']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mash_pgdata:
