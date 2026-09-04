@@ -30,6 +30,9 @@ model Tenant {
   quoteStatuses QuoteStatus[]
   quotes    Quote[]
   orders    Order[]
+  tripStatuses  TripStatus[]
+  trips         Trip[]
+  riskClearances RiskClearance[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
@@ -44,6 +47,7 @@ model Branch {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   orders    Order[]
+  trips     Trip[]
 
   @@index([tenantId])
 }
@@ -142,6 +146,7 @@ model Address {
   cep         String   @db.VarChar(8)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+  tripsAsDestination Trip[]
 
   @@index([tenantId, customerId])
 }
@@ -178,6 +183,8 @@ model Driver {
   active         Boolean        @default(true)
   createdAt      DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+  trips          Trip[]
+  riskClearances RiskClearance[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnhNumber])
@@ -224,6 +231,12 @@ model Vehicle {
   active     Boolean          @default(true)
   createdAt  DateTime         @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime         @updatedAt @db.Timestamptz(3)
+  // Três relações nomeadas: o mesmo Vehicle pode ser o veículo principal
+  // numa Trip e carreta em outra — a composição é da viagem (D-018).
+  tripsAsVehicle  Trip[] @relation("TripVehicle")
+  tripsAsTrailer1 Trip[] @relation("TripTrailer1")
+  tripsAsTrailer2 Trip[] @relation("TripTrailer2")
+  riskClearances  RiskClearance[]
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -397,6 +410,114 @@ model Order {
   total                Decimal  @db.Decimal(14, 2)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  trips     Trip[]
 
   @@index([tenantId, branchId])
+}
+
+// Lista de domínio em tabela, não enum (D-020) — mesmo padrão do
+// QuoteStatus: tenantId nulo = padrão do sistema. isPublic distingue
+// status interno de público (D-010, assento reservado para o portal do
+// embarcador) — "aguardando liberação de risco" nasce isPublic=false;
+// operação não expõe isso a quem só acompanha a carga.
+model TripStatus {
+  id        String   @id @db.Uuid
+  tenantId  String?  @db.Uuid
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  code      String
+  name      String
+  isPublic  Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  trips     Trip[]
+
+  @@unique([tenantId, code])
+}
+
+// Ficha de liberação de risco (D-023) — só registro do resultado já
+// obtido na gerenciadora (Buonny, Opentech, Global5, Nox...), sem
+// integração. number/result em texto livre: formato e vocabulário variam
+// por gerenciadora, não é regra estável o bastante pra fixar em enum
+// (seção 1.6). "Proprietário" é texto livre também — não existe cadastro
+// de dono de veículo no modelo hoje, e criar um não foi pedido.
+// Sem branchId: é dado sobre o par motorista+veículo, não da operação de
+// uma filial (D-011, mesmo critério de Driver/Vehicle).
+//
+// DELETE revogado do role de aplicação: é evidência de conformidade —
+// "o não cumprimento faz perder o direito à indenização" (D-023). Um
+// registro apagado depois de um sinistro é pior que não ter registro
+// nenhum. Mesmo critério do histórico financeiro em D-017.
+model RiskClearance {
+  id         String   @id @db.Uuid
+  tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  number     String
+  driverId   String   @db.Uuid
+  driver     Driver   @relation(fields: [driverId], references: [id])
+  vehicleId  String   @db.Uuid
+  vehicle    Vehicle  @relation(fields: [vehicleId], references: [id])
+  ownerName  String
+  // Datas de calendário, não timestamp (D-016).
+  checkDate  DateTime @db.Date
+  validUntil DateTime @db.Date
+  result     String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+  trips      Trip[]
+
+  @@index([tenantId, driverId, vehicleId])
+}
+
+// Viagem (D-018). branchId obrigatório: movimento é da filial (D-011).
+//
+// Um destino por Trip — o CT-e aceita um só endereço de recebimento
+// (D-018, "Validado em campo"). Um Order vira várias Trip quando há mais
+// de um local de entrega.
+//
+// Composição de veículo pertence à viagem, não ao cadastro (D-018):
+// vehicleId é o veículo principal (cavalo mecânico OU um TRUCK/TOCO
+// rígido sozinho); trailer1Id/trailer2Id só existem quando o principal é
+// articulado. Nenhum CHECK cruza isso com Vehicle.type — validar que
+// "trailer preenchido só faz sentido com cavalo mecânico" é regra de
+// negócio, não integridade sob concorrência (D-030), fica pra aplicação.
+//
+// Motorista e veículo próprios ou de terceiro (D-019): driverId/vehicleId
+// referenciam Driver/Vehicle igual, sem distinção de campo — a distinção
+// já mora em Driver.employmentType e Vehicle.ownership.
+//
+// riskClearanceId opcional: a viagem existe enquanto aguarda a liberação
+// (D-023) — por isso também nasce sem ela, status "aguardando liberação
+// de risco" (interno, D-010) cobre essa espera.
+//
+// DELETE revogado do role de aplicação: Trip é movimento (D-018), e
+// movimento nunca se apaga — "cancelada" é estado (status), não remoção
+// (D-017, mesmo critério de Quote/Order/FreightRate).
+model Trip {
+  id                 String         @id @db.Uuid
+  tenantId           String         @db.Uuid
+  tenant             Tenant         @relation(fields: [tenantId], references: [id])
+  branchId           String         @db.Uuid
+  branch             Branch         @relation(fields: [branchId], references: [id])
+  orderId            String         @db.Uuid
+  order              Order          @relation(fields: [orderId], references: [id])
+  destinationAddressId String       @db.Uuid
+  destinationAddress Address        @relation(fields: [destinationAddressId], references: [id])
+  driverId           String         @db.Uuid
+  driver             Driver         @relation(fields: [driverId], references: [id])
+  vehicleId          String         @db.Uuid
+  vehicle            Vehicle        @relation("TripVehicle", fields: [vehicleId], references: [id])
+  trailer1Id         String?        @db.Uuid
+  trailer1           Vehicle?       @relation("TripTrailer1", fields: [trailer1Id], references: [id])
+  trailer2Id         String?        @db.Uuid
+  trailer2           Vehicle?       @relation("TripTrailer2", fields: [trailer2Id], references: [id])
+  riskClearanceId    String?        @db.Uuid
+  riskClearance      RiskClearance? @relation(fields: [riskClearanceId], references: [id])
+  statusId           String         @db.Uuid
+  status             TripStatus     @relation(fields: [statusId], references: [id])
+  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+
+  @@index([tenantId, branchId])
+  @@index([tenantId, orderId])
+  @@index([tenantId, statusId])
 }
