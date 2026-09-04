@@ -21,6 +21,8 @@ model Tenant {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   users     User[]
   branches  Branch[]
+  customers Customer[]
+  addresses Address[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
@@ -64,4 +66,68 @@ model User {
 
   @@unique([tenantId, email])
   @@index([tenantId, active])
+}
+
+// Individual/Company em inglês (D-007): "pessoa física/jurídica" não é
+// termo jurídico intraduzível como Tomador — o significado sobrevive à
+// tradução. Já CPF/CNPJ/IE ficam como o setor escreve, sem tradução.
+enum PersonType {
+  INDIVIDUAL
+  COMPANY
+}
+
+// Cliente é uma parte, não um papel (D-018). Não existem entidades
+// separadas para remetente, destinatário e tomador — o mesmo Customer pode
+// ser os três na mesma carga. Papel é relacionamento dentro do Order,
+// nunca campo aqui. Cadastro é da empresa: sem branchId (D-011).
+model Customer {
+  id         String     @id @db.Uuid
+  tenantId   String     @db.Uuid
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  personType PersonType
+  name       String
+  // Exatamente um dos dois preenchido, reforçado por CHECK no banco — não
+  // confiar só na aplicação lembrar (mesmo critério de D-012/D-014/D-029).
+  // Dígito verificador NÃO é validado aqui: é lógica não trivial, e regra
+  // fiscal não se responde de memória (seção 1.6) — só formato (contagem
+  // de dígitos) é garantido no banco.
+  cpf        String?    @db.VarChar(11)
+  cnpj       String?    @db.VarChar(14)
+  // Inscrição estadual: texto livre, sem formato validado — varia por UF e
+  // inclui "ISENTO". Não modelar regra de obrigatoriedade sem fonte.
+  ie         String?
+  // Cadastro nunca tem hard delete (D-017): inativar é estado, não remoção.
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
+  addresses  Address[]
+
+  @@unique([tenantId, cpf])
+  @@unique([tenantId, cnpj])
+  @@index([tenantId, active])
+}
+
+// Entidade própria — um Customer pode ter várias (D-018). Campos em
+// português (logradouro, número, bairro, município, UF, CEP): são os
+// nomes do próprio schema de NF-e/CT-e, que D-024 vai precisar mapear —
+// mesmo critério de exceção do D-007 que manteve Tomador/Embarcador.
+// Carrega tenantId e RLS próprios: não basta herdar do Customer via join,
+// senão uma consulta crua nesta tabela vazaria entre tenants (D-012).
+model Address {
+  id          String   @id @db.Uuid
+  tenantId    String   @db.Uuid
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  customerId  String   @db.Uuid
+  customer    Customer @relation(fields: [customerId], references: [id])
+  logradouro  String
+  numero      String?
+  complemento String?
+  bairro      String
+  municipio   String
+  uf          String   @db.Char(2)
+  cep         String   @db.VarChar(8)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([tenantId, customerId])
 }

@@ -746,6 +746,51 @@ D-014: o banco garante, a aplicação não precisa lembrar.
 
 ---
 
+## D-030 · Regra de negócio vive na aplicação, não em trigger
+**Status:** Fechada
+
+Filial padrão do tenant (D-011) é criada por `TenantsService.create()`, numa transação
+interativa que cria `Tenant` e `Branch` juntos — não por trigger de banco (`AFTER INSERT
+ON "Tenant"`).
+
+**Por quê:** um trigger que criasse a filial automaticamente precisaria gerar o próprio
+`id` do `Branch` dentro do banco. Postgres 17 não tem `uuidv7()` nativo (chega só na
+v18) — o trigger teria que reimplementar o algoritmo em PL/pgSQL, abrindo um **segundo
+caminho de geração de identificador**, com lógica própria, direto contra D-015 (UUID v7,
+gerado na aplicação, sem exceção) e contra "fonte única de verdade" (seção 3.2 do
+`CLAUDE.md`).
+
+**Alternativa recusada:** trigger `AFTER INSERT ON "Tenant"` criando o `Branch`
+automaticamente, com `id` gerado no banco (`gen_random_uuid()`, UUID v4). Garantia mais
+forte — vale até para `INSERT` cru, não só para quem passa pelo serviço —, mas quebra
+D-015 nesse ponto específico, e esconde uma regra de negócio ("todo tenant nasce com
+filial padrão") dentro de SQL que não aparece ao ler o código da aplicação, só a
+migração.
+
+**Princípio geral, para além deste caso: regra de negócio vive na aplicação, nunca em
+trigger.** Trigger é lógica implícita — quem lê `TenantsService` não vê a filial sendo
+criada se ela nascer de um trigger; quem lê o schema também não, a menos que abra a
+migração e leia o SQL linha por linha. É o oposto do que `contexto.md` pede de "código
+mantenível por IA": lógica previsível, visível, no lugar onde se espera encontrá-la.
+
+**Exceção — só para garantia de integridade que o banco faz melhor que a aplicação:**
+concorrência, unicidade, exclusão mútua sob corrida. Exemplos já no projeto:
+- `EXCLUDE ... USING gist` na vigência de `FreightRate` (D-014) — impede duas tarifas
+  sobrepostas mesmo com duas requisições simultâneas tentando gravar ao mesmo tempo.
+  Não dá pra garantir isso só na aplicação: é exatamente o tipo de corrida que um
+  `SELECT` seguido de `INSERT` no código não fecha.
+- RLS (D-012) — isolamento entre tenants é caro demais pra confiar na aplicação lembrar
+  de filtrar toda consulta; por isso vira garantia do banco.
+
+**A diferença que separa os dois casos:** RLS e `EXCLUDE` protegem contra o que a
+aplicação pode **errar sob concorrência** (esquecer o filtro, duas escritas
+simultâneas colidindo). "Todo tenant nasce com filial padrão" não tem corrida nenhuma
+pra proteger — é disciplina de **todo caminho de criação passar por um lugar só**. Isso
+é o que o `TenantsService` já resolve, sendo a porta única; um trigger resolveria o
+mesmo problema de um jeito mais forte, mas ilegível, e à custa de D-015.
+
+---
+
 ## Validado em campo
 
 Respondido pelo sócio, com base nas duas transportadoras da consultoria:
