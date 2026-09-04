@@ -23,6 +23,8 @@ model Tenant {
   branches  Branch[]
   customers Customer[]
   addresses Address[]
+  drivers   Driver[]
+  vehicles  Vehicle[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
@@ -130,4 +132,88 @@ model Address {
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([tenantId, customerId])
+}
+
+// Vínculo do motorista com a transportadora (D-019, assento reservado — a
+// contratação de terceiro em si, TAC/ETC, ainda não existe como cadastro
+// próprio). Inglês (D-007): não é termo jurídico, "funcionário/autônomo"
+// não perde precisão traduzido.
+enum EmploymentType {
+  EMPLOYEE
+  SELF_EMPLOYED
+}
+
+// Motorista é cadastro, não conta de acesso (D-009) — sem senha, sem
+// login, sem relação com User. Sem branchId: cadastro é da empresa
+// (D-011).
+model Driver {
+  id             String         @id @db.Uuid
+  tenantId       String         @db.Uuid
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  name           String
+  // Formato básico (contagem de dígitos) no banco, igual Customer — não o
+  // dígito verificador (seção 1.6).
+  cpf            String         @db.VarChar(11)
+  // Número e categoria da CNH ficam texto livre, sem CHECK de formato:
+  // diferente de CPF/CEP, não tenho como confirmar a regra de memória com
+  // segurança (seção 1.6) — validação fica para quando houver fonte.
+  cnhNumber      String
+  cnhCategory    String
+  // Data de calendário, não timestamp (D-016) — vencimento não tem hora.
+  cnhValidUntil  DateTime       @db.Date
+  employmentType EmploymentType
+  // Cadastro nunca tem hard delete (D-017): inativar é estado, não remoção.
+  active         Boolean        @default(true)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+
+  @@unique([tenantId, cpf])
+  @@unique([tenantId, cnhNumber])
+  @@index([tenantId, active])
+}
+
+// Tipo fixo por regulação do setor (ANTT), não varia por cliente — D-020
+// já cita "tipo de veículo" como exceção que permanece enum, não tabela.
+// Nomes em português: classificação do próprio setor de transporte
+// rodoviário, sem equivalente direto em inglês (mesmo critério de
+// Tomador/Embarcador em D-007).
+enum VehicleType {
+  CAVALO_MECANICO
+  CARRETA
+  TRUCK
+  TOCO
+}
+
+enum VehicleOwnership {
+  OWNED
+  THIRD_PARTY
+}
+
+// Vehicle é a unidade individual — cavalo mecânico e carreta são cadastros
+// separados, cada um com placa e RENAVAM próprios (D-018). A composição
+// (qual cavalo puxa qual carreta numa viagem) pertence à viagem, não ao
+// cadastro — por isso não existe nenhuma referência de um Vehicle a outro
+// aqui. Sem branchId: cadastro é da empresa (D-011).
+model Vehicle {
+  id         String           @id @db.Uuid
+  tenantId   String           @db.Uuid
+  tenant     Tenant           @relation(fields: [tenantId], references: [id])
+  plate      String
+  // Texto livre, sem CHECK: RENAVAM já teve tamanho histórico diferente do
+  // atual, e placa tem dois formatos válidos (antigo e Mercosul) — não é
+  // regra estável o bastante pra afirmar de memória (seção 1.6).
+  renavam    String
+  type       VehicleType
+  ownership  VehicleOwnership
+  // Decimal, não number — mesmo cuidado do D-013 para valor que alimenta
+  // cálculo de frete depois (R$/ton).
+  capacityKg Decimal          @db.Decimal(10, 3)
+  tareKg     Decimal          @db.Decimal(10, 3)
+  active     Boolean          @default(true)
+  createdAt  DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime         @updatedAt @db.Timestamptz(3)
+
+  @@unique([tenantId, plate])
+  @@unique([tenantId, renavam])
+  @@index([tenantId, active])
 }
