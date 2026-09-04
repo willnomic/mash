@@ -4,8 +4,8 @@ import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 
 interface OrderParties {
   branchId: string;
-  remetenteId: string;
-  destinatarioId: string;
+  senderId: string;
+  recipientId: string;
   tomadorId: string;
 }
 
@@ -28,8 +28,8 @@ export class OrderService {
         branchId: input.branchId,
         quoteId: quote.id,
         freightRateId: quote.freightRateId,
-        remetenteId: input.remetenteId,
-        destinatarioId: input.destinatarioId,
+        senderId: input.senderId,
+        recipientId: input.recipientId,
         tomadorId: input.tomadorId,
         rate: quote.rate,
         minimumFreight: quote.minimumFreight,
@@ -57,8 +57,8 @@ export class OrderService {
         branchId: input.branchId,
         quoteId: null,
         freightRateId: freightRate.id,
-        remetenteId: input.remetenteId,
-        destinatarioId: input.destinatarioId,
+        senderId: input.senderId,
+        recipientId: input.recipientId,
         tomadorId: input.tomadorId,
         rate: freightRate.rate,
         minimumFreight: freightRate.minimumFreight,

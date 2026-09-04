@@ -111,10 +111,10 @@ model Customer {
   addresses  Address[]
   freightRates FreightRate[]
   // Três relações nomeadas para o mesmo model — um Customer pode ser
-  // remetente numa Order e tomador em outra (D-018).
-  ordersAsRemetente    Order[] @relation("OrderRemetente")
-  ordersAsDestinatario Order[] @relation("OrderDestinatario")
-  ordersAsTomador      Order[] @relation("OrderTomador")
+  // sender numa Order e tomador em outra (D-018).
+  ordersAsSender    Order[] @relation("OrderSender")
+  ordersAsRecipient Order[] @relation("OrderRecipient")
+  ordersAsTomador   Order[] @relation("OrderTomador")
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnpj])
@@ -353,10 +353,17 @@ model Quote {
 // freightRateId é sempre preenchido (referência de auditoria); quoteId só
 // quando veio de uma cotação.
 //
-// Remetente, destinatário e tomador são relacionamentos separados com o
-// mesmo Customer — nunca um "tipo" no cadastro (D-018: Customer é uma
-// parte, não um papel). Tomador é campo próprio e obrigatório, nunca
-// inferido dos outros dois.
+// Sender, recipient e tomador são relacionamentos separados com o mesmo
+// Customer — nunca um "tipo" no cadastro (D-018: Customer é uma parte,
+// não um papel). Tomador é campo próprio e obrigatório, nunca inferido
+// dos outros dois.
+//
+// senderId/recipientId em inglês, tomadorId em português (D-007,
+// corrigido 04/09/2026): "remetente"/"destinatário" traduzem sem perda —
+// são só quem despacha e quem recebe, sem efeito jurídico distinto do
+// inglês. "Tomador" tem definição fiscal real (determina destaque de
+// ICMS e destino da fatura, D-018) — isso é o que a exceção do D-007
+// protege, não "o XML usa essa palavra". Detalhe em docs/decisoes.md.
 //
 // Order 1:N Trip — Trip ainda não existe. Nada aqui impede isso: é a
 // tabela filha (Trip.orderId) que vai carregar a referência, não o
@@ -377,10 +384,10 @@ model Order {
   quote          Quote?       @relation(fields: [quoteId], references: [id])
   freightRateId  String       @db.Uuid
   freightRate    FreightRate  @relation(fields: [freightRateId], references: [id])
-  remetenteId    String       @db.Uuid
-  remetente      Customer     @relation("OrderRemetente", fields: [remetenteId], references: [id])
-  destinatarioId String       @db.Uuid
-  destinatario   Customer     @relation("OrderDestinatario", fields: [destinatarioId], references: [id])
+  senderId       String       @db.Uuid
+  sender         Customer     @relation("OrderSender", fields: [senderId], references: [id])
+  recipientId    String       @db.Uuid
+  recipient      Customer     @relation("OrderRecipient", fields: [recipientId], references: [id])
   tomadorId      String       @db.Uuid
   tomador        Customer     @relation("OrderTomador", fields: [tomadorId], references: [id])
   // Congelado na criação — cópia, não consulta. Escalas de D-013.

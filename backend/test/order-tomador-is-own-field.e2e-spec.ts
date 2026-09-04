@@ -21,7 +21,7 @@ describe('Order · tomador é campo próprio, não derivado (D-018)', () => {
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'Order'
-        AND column_name IN ('remetenteId', 'destinatarioId', 'tomadorId')
+        AND column_name IN ('senderId', 'recipientId', 'tomadorId')
       ORDER BY column_name
     `;
 
@@ -46,7 +46,7 @@ describe('Order · tomador é campo próprio, não derivado (D-018)', () => {
         ON tc.constraint_name = ccu.constraint_name
       WHERE tc.constraint_type = 'FOREIGN KEY'
         AND tc.table_name = 'Order'
-        AND kcu.column_name IN ('remetenteId', 'destinatarioId', 'tomadorId')
+        AND kcu.column_name IN ('senderId', 'recipientId', 'tomadorId')
       ORDER BY kcu.column_name
     `;
 
@@ -56,8 +56,8 @@ describe('Order · tomador é campo próprio, não derivado (D-018)', () => {
     // genérica nem um "tipo" no cadastro do Customer.
     const columnNames = fks.map((fk) => fk.column_name).sort();
     expect(columnNames).toEqual([
-      'destinatarioId',
-      'remetenteId',
+      'recipientId',
+      'senderId',
       'tomadorId',
     ]);
   });

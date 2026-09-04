@@ -816,7 +816,35 @@ mesmo problema de um jeito mais forte, mas ilegível, e à custa de D-015.
 
 ---
 
-## Validado em campo
+## D-031 · Correção de nomenclatura: sender/recipient, não remetente/destinatário
+**Status:** Fechada
+
+Os campos de papel do `Order` (D-018) são `senderId`, `recipientId` e `tomadorId` — os
+dois primeiros em inglês, o terceiro em português.
+
+**Erro identificado 04/09/2026, pelo usuário:** ao modelar `Order`, apliquei aos três
+campos o mesmo critério usado em `Address` (`logradouro`, `bairro`, `município`) —
+"o schema de NF-e/CT-e usa essas palavras, D-024 vai precisar mapear". Isso não é o
+critério do D-007. D-007 reserva português para **termo com definição jurídica que a
+tradução destrói** ("`serviceTaker` não simplifica tomador do serviço"). "O XML usa essa
+palavra" e "o termo tem definição jurídica" são coisas diferentes — só a segunda é a
+regra.
+
+`Tomador` passa no critério certo: a designação determina destaque de ICMS e destino da
+fatura (D-018), um efeito jurídico real que "payer" não capturaria com a mesma precisão.
+`Remetente`/`destinatário` não têm esse efeito — são só "quem despacha" e "quem recebe",
+sem nuance fiscal própria. `sender`/`recipient` traduzem sem perder nada.
+
+**Correção:** `remetenteId`→`senderId`, `destinatarioId`→`recipientId`, `tomadorId`
+mantido. Migração `20260904081038_rename_order_customer_roles` (RENAME COLUMN, não
+DROP+ADD — não há dado de produção ainda, mas é a forma correta).
+
+**Nota para `Address`:** o critério ali continua válido — `logradouro`/`bairro`/
+`município`/`UF`/`CEP` não têm definição jurídica própria isolada, mas são a
+nomenclatura literal dos campos que D-024 vai mapear do XML de NF-e/CT-e, e não têm
+tradução natural em uso no setor (ninguém fala "street" ao preencher um CT-e). A
+diferença para remetente/destinatário: lá existe uma tradução natural e sem perda
+(sender/recipient); em Address, a alternativa em inglês seria artificial.
 
 Respondido pelo sócio, com base nas duas transportadoras da consultoria:
 

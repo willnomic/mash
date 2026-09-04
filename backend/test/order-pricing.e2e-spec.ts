@@ -100,8 +100,8 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromQuote({
       quoteId: quote.id,
       branchId: seed.branch.id,
-      remetenteId: seed.customer.id,
-      destinatarioId: seed.customer.id,
+      senderId: seed.customer.id,
+      recipientId: seed.customer.id,
       tomadorId: seed.customer.id,
     });
 
@@ -117,8 +117,8 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: freightRate.id,
       branchId: seed.branch.id,
-      remetenteId: seed.customer.id,
-      destinatarioId: seed.customer.id,
+      senderId: seed.customer.id,
+      recipientId: seed.customer.id,
       tomadorId: seed.customer.id,
       total: '900',
     });
@@ -135,8 +135,8 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: originalRate.id,
       branchId: seed.branch.id,
-      remetenteId: seed.customer.id,
-      destinatarioId: seed.customer.id,
+      senderId: seed.customer.id,
+      recipientId: seed.customer.id,
       tomadorId: seed.customer.id,
       total: '500',
     });
@@ -161,8 +161,8 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: freightRate.id,
       branchId: seed.branch.id,
-      remetenteId: seed.customer.id,
-      destinatarioId: seed.customer.id,
+      senderId: seed.customer.id,
+      recipientId: seed.customer.id,
       tomadorId: seed.customer.id,
       total: '500',
     });
@@ -180,8 +180,8 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: freightRate.id,
       branchId: seed.branch.id,
-      remetenteId: seed.customer.id,
-      destinatarioId: seed.customer.id,
+      senderId: seed.customer.id,
+      recipientId: seed.customer.id,
       tomadorId: seed.customer.id,
       total: '500',
     });
