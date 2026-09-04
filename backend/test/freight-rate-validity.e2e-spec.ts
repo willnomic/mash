@@ -2,6 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
+import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 
 // Roda contra o PostgreSQL real do docker-compose — a garantia que este
 // arquivo prova (EXCLUDE, GRANT por coluna) é do banco, não da aplicação.
@@ -16,6 +17,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
 
   beforeEach(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     tenant = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
     });
@@ -42,6 +44,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
 
   afterAll(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });

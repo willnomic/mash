@@ -8,6 +8,7 @@ import { App } from 'supertest/types';
 import { v7 as uuidv7 } from 'uuid';
 import { AppModule } from '../src/app.module.js';
 import { base } from '../src/prisma/prisma-tenant.js';
+import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 
 // Roda contra o PostgreSQL real do docker-compose e sobe a aplicação Nest
 // inteira (não mock: RLS é do banco, e o que este arquivo prova é o wiring
@@ -34,12 +35,14 @@ describe('Auth · login e wiring do tenant (D-012, D-029)', () => {
   afterAll(async () => {
     await app.close();
     await admin.$executeRaw`TRUNCATE TABLE "User", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
 
   beforeEach(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "User", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     const passwordHash = await argon2.hash(password);
 
     tenantA = await admin.tenant.create({

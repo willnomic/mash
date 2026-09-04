@@ -1,6 +1,7 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
+import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 import { TenantsService } from '../src/tenant/tenants.service.js';
 
 // Roda contra o PostgreSQL real do docker-compose (não mock: a garantia
@@ -14,10 +15,12 @@ describe('TenantsService · filial padrão nasce junto com o tenant (D-011)', ()
 
   beforeEach(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Branch", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
   });
 
   afterAll(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Branch", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });

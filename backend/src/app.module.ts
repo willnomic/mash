@@ -5,6 +5,8 @@ import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { TenantModule } from './tenant/tenant.module.js';
 import { MeModule } from './me/me.module.js';
+import { QuoteModule } from './quote/quote.module.js';
+import { OrderModule } from './order/order.module.js';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { MeModule } from './me/me.module.js';
     AuthModule,
     TenantModule,
     MeModule,
+    QuoteModule,
+    OrderModule,
   ],
   controllers: [AppController],
   providers: [AppService],

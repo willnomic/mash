@@ -34,86 +34,103 @@ async function seedTenant(name: string, slug: string) {
       destinationState: 'PR',
     },
   });
-  return { tenant, customer, lane };
+  const freightRate = await admin.freightRate.create({
+    data: {
+      id: uuidv7(),
+      tenantId: tenant.id,
+      customerId: customer.id,
+      laneId: lane.id,
+      validFrom: new Date('2026-01-01'),
+      validTo: new Date('9999-12-31'),
+      rate: '150.5',
+      minimumFreight: '500',
+      additionalPercentage: '2.5',
+    },
+  });
+  return { tenant, customer, lane, freightRate };
 }
 
-describe('FreightRate · Row-Level Security (D-012)', () => {
+describe('Quote · Row-Level Security (D-012)', () => {
   let a: Awaited<ReturnType<typeof seedTenant>>;
   let b: Awaited<ReturnType<typeof seedTenant>>;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     a = await seedTenant('A', 'transportadora-a');
     b = await seedTenant('B', 'transportadora-b');
-    await admin.freightRate.create({
+    const openStatus = await admin.quoteStatus.findFirstOrThrow({
+      where: { code: 'OPEN' },
+    });
+
+    await admin.quote.create({
       data: {
         id: uuidv7(),
         tenantId: a.tenant.id,
-        customerId: a.customer.id,
-        laneId: a.lane.id,
-        validFrom: new Date('2026-01-01'),
-        validTo: new Date('2026-12-31'),
-        rate: '150.5',
-        minimumFreight: '500',
-        additionalPercentage: '2.5',
+        freightRateId: a.freightRate.id,
+        statusId: openStatus.id,
+        rate: a.freightRate.rate,
+        minimumFreight: a.freightRate.minimumFreight,
+        additionalPercentage: a.freightRate.additionalPercentage,
+        total: '500',
       },
     });
-    await admin.freightRate.create({
+    await admin.quote.create({
       data: {
         id: uuidv7(),
         tenantId: b.tenant.id,
-        customerId: b.customer.id,
-        laneId: b.lane.id,
-        validFrom: new Date('2026-01-01'),
-        validTo: new Date('2026-12-31'),
-        rate: '200',
-        minimumFreight: '600',
-        additionalPercentage: '3',
+        freightRateId: b.freightRate.id,
+        statusId: openStatus.id,
+        rate: b.freightRate.rate,
+        minimumFreight: b.freightRate.minimumFreight,
+        additionalPercentage: b.freightRate.additionalPercentage,
+        total: '600',
       },
     });
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
 
   it('não enxerga dado de outro tenant', async () => {
-    const rates = await forTenant(a.tenant.id).freightRate.findMany();
+    const quotes = await forTenant(a.tenant.id).quote.findMany();
 
-    expect(rates).toHaveLength(1);
-    expect(rates[0].tenantId).toBe(a.tenant.id);
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0].tenantId).toBe(a.tenant.id);
   });
 
   it('sem tenant definido, não retorna nada', async () => {
-    const rates = await base.freightRate.findMany();
+    const quotes = await base.quote.findMany();
 
-    expect(rates).toHaveLength(0);
+    expect(quotes).toHaveLength(0);
   });
 
   it('protege também consulta crua', async () => {
-    const rows =
-      await forTenant(a.tenant.id).$queryRaw`SELECT * FROM "FreightRate"`;
+    const rows = await forTenant(a.tenant.id).$queryRaw`SELECT * FROM "Quote"`;
 
     expect(rows).toHaveLength(1);
   });
 
   it('impede gravar no tenant alheio', async () => {
+    const openStatus = await admin.quoteStatus.findFirstOrThrow({
+      where: { code: 'OPEN' },
+    });
+
     await expect(
-      forTenant(a.tenant.id).freightRate.create({
+      forTenant(a.tenant.id).quote.create({
         data: {
           id: uuidv7(),
           tenantId: b.tenant.id,
-          customerId: b.customer.id,
-          laneId: b.lane.id,
-          validFrom: new Date('2027-01-01'),
-          validTo: new Date('2027-12-31'),
-          rate: '999',
-          minimumFreight: '999',
-          additionalPercentage: '9',
+          freightRateId: b.freightRate.id,
+          statusId: openStatus.id,
+          rate: '1',
+          minimumFreight: '1',
+          additionalPercentage: '1',
+          total: '1',
         },
       }),
     ).rejects.toThrow();

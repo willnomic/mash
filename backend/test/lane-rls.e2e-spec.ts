@@ -2,6 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
+import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 
 // Roda contra o PostgreSQL real do docker-compose (não mock: RLS é do
 // banco). Conecta como dono só para semear — mash_app não teria como criar
@@ -16,6 +17,7 @@ describe('Lane · Row-Level Security (D-012)', () => {
 
   beforeEach(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     tenantA = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
     });
@@ -46,6 +48,7 @@ describe('Lane · Row-Level Security (D-012)', () => {
 
   afterAll(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });

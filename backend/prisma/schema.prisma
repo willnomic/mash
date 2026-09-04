@@ -27,6 +27,9 @@ model Tenant {
   vehicles  Vehicle[]
   lanes     Lane[]
   freightRates FreightRate[]
+  quoteStatuses QuoteStatus[]
+  quotes    Quote[]
+  orders    Order[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
@@ -40,6 +43,7 @@ model Branch {
   name      String
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  orders    Order[]
 
   @@index([tenantId])
 }
@@ -106,6 +110,11 @@ model Customer {
   updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
   addresses  Address[]
   freightRates FreightRate[]
+  // Três relações nomeadas para o mesmo model — um Customer pode ser
+  // remetente numa Order e tomador em outra (D-018).
+  ordersAsRemetente    Order[] @relation("OrderRemetente")
+  ordersAsDestinatario Order[] @relation("OrderDestinatario")
+  ordersAsTomador      Order[] @relation("OrderTomador")
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnpj])
@@ -273,6 +282,114 @@ model FreightRate {
   additionalPercentage Decimal @db.Decimal(7, 4)
   createdAt  DateTime @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+  quotes     Quote[]
+  orders     Order[]
 
   @@index([tenantId, customerId, laneId])
+}
+
+// Lista de domínio em tabela, não enum (D-020): tenantId nulo = padrão do
+// sistema (aberta/fechada/perdida, semeadas na migração), preenchido =
+// status próprio daquele tenant. Política de RLS não é a padrão: leitura
+// e escrita liberam tenantId IS NULL OU do próprio tenant — um tenant
+// consegue, em teoria, criar uma linha "global" (tenantId NULL). Aceito
+// deliberadamente: é só um catálogo de status, não dado isolado de outro
+// tenant — diferente de User/Customer/etc., onde isso seria grave.
+model QuoteStatus {
+  id        String   @id @db.Uuid
+  tenantId  String?  @db.Uuid
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  // Identificador estável usado pelo código (ex.: "OPEN") — nunca muda,
+  // diferente de name (rótulo em português pra tela, D-008).
+  code      String
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  quotes    Quote[]
+
+  @@unique([tenantId, code])
+}
+
+// Etapa opcional que antecede o pedido (D-018, D-028). Sem branchId: não
+// listada como movimento no D-018 (cadastro é da empresa, D-011) — é
+// registro de precificação, não de operação.
+//
+// Congela os valores da FreightRate no fechamento (D-014) — nunca
+// recalculado depois. Imutabilidade garantida no banco: mash_app só tem
+// UPDATE liberado em statusId e updatedAt (GRANT por coluna, mesmo
+// mecanismo do FreightRate) e DELETE revogado (D-017: é histórico —
+// "perdida" é estado, não remoção).
+model Quote {
+  id            String      @id @db.Uuid
+  tenantId      String      @db.Uuid
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+  // Referência de auditoria à linha de origem (D-014) — não redundante
+  // com customer/lane: ambos são derived via freightRate.
+  freightRateId String      @db.Uuid
+  freightRate   FreightRate @relation(fields: [freightRateId], references: [id])
+  statusId      String      @db.Uuid
+  status        QuoteStatus @relation(fields: [statusId], references: [id])
+  // Congelado no fechamento — cópia, não consulta. Escalas de D-013.
+  rate                 Decimal  @db.Decimal(18, 6)
+  minimumFreight       Decimal  @db.Decimal(14, 2)
+  additionalPercentage Decimal  @db.Decimal(7, 4)
+  // Cálculo real de frete (peso x tarifa, piso mínimo) não existe ainda —
+  // entra quando Order/Quote ganharem itens de carga. Por ora, quem
+  // calcula e informa é o chamador do serviço.
+  total                Decimal  @db.Decimal(14, 2)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  orders    Order[]
+
+  @@index([tenantId, statusId])
+}
+
+// Pedido (D-018). branchId obrigatório: movimento é da filial (D-011) —
+// diferente de Quote/FreightRate/Customer, que são cadastro/precificação
+// da empresa.
+//
+// Congela os valores aplicados nos dois caminhos de precificação — via
+// Quote fechada ou consultando FreightRate direto na criação (D-018).
+// freightRateId é sempre preenchido (referência de auditoria); quoteId só
+// quando veio de uma cotação.
+//
+// Remetente, destinatário e tomador são relacionamentos separados com o
+// mesmo Customer — nunca um "tipo" no cadastro (D-018: Customer é uma
+// parte, não um papel). Tomador é campo próprio e obrigatório, nunca
+// inferido dos outros dois.
+//
+// Order 1:N Trip — Trip ainda não existe. Nada aqui impede isso: é a
+// tabela filha (Trip.orderId) que vai carregar a referência, não o
+// contrário.
+//
+// Sem UPDATE nenhum liberado a mash_app: nada nesta tabela muda
+// legitimamente depois de criada (sem status, sem campo mutável) — mesmo
+// mecanismo de imutabilidade do FreightRate, aplicado ao conjunto vazio
+// de colunas mutáveis. DELETE também revogado (D-017: movimento
+// financeiro nunca se apaga).
+model Order {
+  id             String       @id @db.Uuid
+  tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id])
+  branchId       String       @db.Uuid
+  branch         Branch       @relation(fields: [branchId], references: [id])
+  quoteId        String?      @db.Uuid
+  quote          Quote?       @relation(fields: [quoteId], references: [id])
+  freightRateId  String       @db.Uuid
+  freightRate    FreightRate  @relation(fields: [freightRateId], references: [id])
+  remetenteId    String       @db.Uuid
+  remetente      Customer     @relation("OrderRemetente", fields: [remetenteId], references: [id])
+  destinatarioId String       @db.Uuid
+  destinatario   Customer     @relation("OrderDestinatario", fields: [destinatarioId], references: [id])
+  tomadorId      String       @db.Uuid
+  tomador        Customer     @relation("OrderTomador", fields: [tomadorId], references: [id])
+  // Congelado na criação — cópia, não consulta. Escalas de D-013.
+  rate                 Decimal  @db.Decimal(18, 6)
+  minimumFreight       Decimal  @db.Decimal(14, 2)
+  additionalPercentage Decimal  @db.Decimal(7, 4)
+  total                Decimal  @db.Decimal(14, 2)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([tenantId, branchId])
 }

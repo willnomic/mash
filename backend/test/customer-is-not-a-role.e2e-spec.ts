@@ -2,6 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
+import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 
 // Trava a modelagem de D-018 antes de Order existir: Customer é uma parte,
 // não um papel. Não existem entidades separadas para remetente,
@@ -16,6 +17,7 @@ describe('Customer · é uma parte, não um papel (D-018)', () => {
 
   beforeEach(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Address", "Customer", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     tenantA = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
     });
@@ -23,6 +25,7 @@ describe('Customer · é uma parte, não um papel (D-018)', () => {
 
   afterAll(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Address", "Customer", "Tenant" CASCADE`;
+    await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
