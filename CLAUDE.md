@@ -320,13 +320,42 @@ acessa o banco interno de outro.
 - `DATABASE_URL` — dono, apenas para migrações via CLI
 - `DATABASE_URL_APP` — aplicação, sem posse de tabela (senão o RLS não se aplica)
 
-**Comandos:** *(preencher quando o repositório existir)*
-- Build:
-- Teste:
-- Lint / type-check:
-- Migração:
+**Comandos:** (rodar dentro de `backend/` — é o único app do repositório até agora)
+- Build: `npm run build` (`nest build`)
+- Teste unitário: `npm test` (`vitest run`)
+- Teste de integração/e2e: `npm run test:e2e` (`vitest run --config ./vitest.config.e2e.ts`)
+  — roda contra PostgreSQL real (RLS é do banco); precisa do container subido
+  (`docker compose up -d db`, na raiz do repo)
+- Lint: `npm run lint` (`oxlint src/ test/`). Não há script de type-check separado —
+  a checagem de tipo roda dentro do `build` (`nest build` usa `tsc`)
+- Migração: `npx prisma migrate dev --create-only --name <nome>` gera o diff sem
+  aplicar (editar à mão pra RLS depois, conforme `docs/d012-multi-tenant-rls.md`);
+  `npx prisma migrate reset --force` reaplica tudo do zero em dev — **ação
+  destrutiva, exige confirmação explícita do usuário a cada execução** (seção 2);
+  `npx prisma generate` regenera o client. Conexão via `prisma.config.ts`
+  (`DATABASE_URL`, dono) — não mais `datasource.url` no `schema.prisma` (Prisma 7)
 
-**Estrutura de diretórios:** *(preencher)*
+**Estrutura de diretórios:**
+```
+backend/
+  prisma/
+    schema.prisma          — models e enums
+    migrations/             — uma pasta por migração, com o .sql editado à mão pra RLS
+  src/
+    main.ts                 — bootstrap (carrega dotenv/config)
+    app.module.ts            — módulo raiz; registra ClsModule global
+    prisma/prisma-tenant.ts  — forTenant(tenantId) e o cliente base sem escopo
+    auth/                    — login, JWT, decorator @Public()
+    tenant/                  — TenantGuard (global) e TenantPrisma injetável
+    me/                      — exemplo mínimo de rota protegida
+  test/
+    *.e2e-spec.ts            — RLS, guarda de schema, auth — contra Postgres real
+    *.spec.ts                — unitário
+docker-compose.yml           — Postgres local (porta 5433 — a 5432 já tem um
+                                Postgres nativo na máquina)
+docker/init-db.sql           — cria o role mash_app (cluster-level, sobrevive a reset)
+docs/                        — contexto.md, decisoes.md, guias por decisão (d0XX-*.md)
+```
 
 **Áreas sensíveis — não alterar sem autorização explícita:**
 - Políticas de RLS e migrações que as definem

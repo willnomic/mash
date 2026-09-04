@@ -20,6 +20,22 @@ model Tenant {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   users     User[]
+  branches  Branch[]
+}
+
+// Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
+// Vehicle...) não carrega branchId; movimento (Order, Trip, CTe, Invoice...)
+// carrega. Existe agora só pra esses modelos já nascerem com branchId —
+// zero tela, zero filtro, zero permissão por filial no MVP.
+model Branch {
+  id        String   @id @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([tenantId])
 }
 
 // Papel define o que se pode fazer (D-009) — lógica separada de tenant, que
