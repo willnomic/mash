@@ -12,8 +12,13 @@ Uma resposta errada com tom confiante custa mais caro que uma pergunta.
 
 ```
 docs/contexto.md    — o projeto, quem constrói, restrições, princípios
-docs/decisoes.md    — 28 decisões técnicas fechadas (D-001 a D-028)
+docs/decisoes.md    — decisões técnicas fechadas (D-001 a D-031)
+docs/estado.md       — o que já está construído, com teste passando, agora
 ```
+
+**Ao fim de cada etapa concluída, atualize `docs/estado.md`.** É snapshot do código, não
+do plano — se ele e o código divergirem depois, o código vence e o arquivo ficou
+desatualizado. Mantê-lo certo é parte de terminar a etapa, não um passo à parte.
 
 **As decisões são vinculantes.** Se o pedido do usuário contradiz uma decisão registrada,
 **não obedeça em silêncio**: aponte qual decisão é afetada, explique o conflito, e espere.
