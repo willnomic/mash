@@ -4,7 +4,7 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 04/09/2026, commit `5f7c0d2`.
+Atualizado em 04/09/2026, commit `be7e7f3`.
 
 ---
 
@@ -45,13 +45,30 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
 - `RiskClearance`: ficha de liberação (D-023), só registro, sem integração com
   gerenciadora; `DELETE` revogado (é evidência de conformidade)
 
+**Terceiro** (`CarrierHire`, `CarrierPayment`, `DeductionReason`, D-019)
+- Terceiro não é cadastro próprio — reaproveita `Customer` (D-018 aplicado: é uma parte
+  que exerce papel), papel vive em `CarrierHire.thirdPartyId`
+- `CarrierHire`: contratação 1:1 com `Trip`, só `agreedFreight` congela; CIOT
+  (`ciotNumber`, só TAC) e vale-pedágio (`tollVoucherSupplierCnpj`+
+  `tollVoucherPurchaseNumber`+`tollVoucherAmount`, layout mínimo do MDF-e) são as únicas
+  colunas com `UPDATE` liberado — preenchidas depois da contratação; vale-pedágio nunca
+  entra no frete nem vira desconto (não é frete, não é base de tributo); `DELETE`
+  revogado
+- `CarrierPayment`: livro de eventos append-only (`ADVANCE`/`BALANCE`/`DEDUCTION`/
+  `REVERSAL`, valor sempre positivo, sinal vem do `type`) — saldo nunca é coluna, é
+  `SUM` dos eventos; `UPDATE`/`DELETE` revogados por inteiro (correção é `REVERSAL`,
+  linha nova); `CHECK` amarra `deductionReasonId` a `type = DEDUCTION`
+- `DeductionReason`: motivo do desconto em tabela, não enum (D-020) — mesmo padrão
+  `QuoteStatus`/`TripStatus`; semeados `DAMAGE`/`DETENTION`/`FINE`/`FUEL`
+- Decisão registrada em `decisoes.md` (D-032)
+
 **Endpoints HTTP hoje:** só três — `GET /` (público), `POST /auth/login` (público),
 `GET /me/users` (protegido, exemplo mínimo de wiring). `Quote`/`Order`/`Trip` têm
 serviço (`QuoteService`, `OrderService`) mas nenhum controller.
 
 ---
 
-## Testes: 97 passando (4 unitários + 93 e2e), zero mock de banco
+## Testes: 118 passando (4 unitários + 114 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -71,6 +88,8 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Status compartilhado (`tenantId` nulo = padrão do sistema) | `quote-status-rls.e2e-spec.ts` |
 | Composição de veículo (cavalo+2 carretas, truck sozinho, `CHECK` recusando inválido) | `trip-composition.e2e-spec.ts` |
 | Status interno não aparece em consulta filtrada por `isPublic` | `trip-status-visibility.e2e-spec.ts` |
+| Contratação congela `agreedFreight`, libera só CIOT/vale-pedágio, `DELETE` recusado | `carrier-hire-ledger.e2e-spec.ts` |
+| Livro de pagamento append-only, `CHECK` motivo↔`DEDUCTION`, saldo por soma de eventos, estorno, vale-pedágio não entra na conta | `carrier-hire-ledger.e2e-spec.ts` |
 
 Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
@@ -78,8 +97,8 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-Nada no momento — última unidade concluída foi `Trip`/`TripStatus`/`RiskClearance`
-(commit `5f7c0d2`).
+Nada no momento — última unidade concluída foi `CarrierHire`/`CarrierPayment`/
+`DeductionReason` (D-019, ainda não commitada nesta sessão).
 
 ---
 
@@ -87,14 +106,13 @@ Nada no momento — última unidade concluída foi `Trip`/`TripStatus`/`RiskClea
 
 Dentro do escopo v1 (D-028), ainda faltam:
 
-- Terceiro/agregado como cadastro próprio (TAC/ETC) — hoje só `Driver.employmentType` e
-  `Vehicle.ownership` existem; contratação da viagem com terceiro (D-019) não tem modelo
 - Ordem de coleta em PDF (D-027)
 - Ocorrência da viagem (`Occurrence`, mencionada em D-018 mas não construída)
 - CT-e e MDF-e — emissão via provedor (D-006), importação de XML de NF-e (D-024)
 - Averbação (D-023) — depende de saber se a AT&M tem API (pendência bloqueante em
   `decisoes.md`)
-- Fatura, contas a receber, pagamento a terceiro (D-025, D-019)
+- Fatura, contas a receber (D-025) — pagamento a terceiro já modelado (`CarrierHire`/
+  `CarrierPayment`, D-019), falta serviço/controller
 - Qualquer frontend — zero tela construída até aqui
 
 ---

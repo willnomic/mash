@@ -862,6 +862,55 @@ Respondido pelo sócio, com base nas duas transportadoras da consultoria:
 - **Cotação:** caso a caso para clientes novos, contrato/tabela para engajados.
   Proporção quase igual; o volume de carga é o que determina → D-028
 
+---
+
+## D-032 · Pagamento a terceiro: contratação imutável + livro de eventos
+**Status:** Fechada
+
+Modela a contratação da viagem com terceiro (D-019) em duas tabelas, não uma:
+
+**`CarrierHire`** — a contratação em si, 1:1 com `Trip`. Terceiro não é cadastro
+próprio: reaproveita `Customer` (D-018 aplicado a D-019 — TAC/ETC já são PF/PJ, o
+mesmo formato de `Customer`), papel vive em `thirdPartyId`. Só `agreedFreight` congela
+na criação (D-014); CIOT (`ciotNumber`, só existe pra TAC) e vale-pedágio
+(`tollVoucherSupplierCnpj`+`tollVoucherPurchaseNumber`+`tollVoucherAmount`, layout
+mínimo exigido pelo grupo de vale-pedágio do MDF-e, D-028) são as únicas colunas com
+`UPDATE` liberado — são emitidos fora do sistema depois que a contratação já existe,
+não dá pra exigir no momento do `INSERT`.
+
+**`CarrierPayment`** — livro de eventos append-only, não coluna de saldo/status.
+
+**Por quê não `advanceAmount`/`balanceAmount` como coluna (erro corrigido nesta
+sessão):** adiantamento a terceiro é parcelado, e existe desconto de avaria, diária,
+multa e abastecimento descontado do frete (D-026), além de estorno. Com coluna única
+por conceito, cada parcela ou desconto viraria `UPDATE` em valor financeiro — proibido
+pelo histórico de D-017. Saldo e status de pagamento são **sempre** derivados por
+`SUM(grossAmount)` sobre os eventos, nunca gravados.
+
+`type` (`ADVANCE`/`BALANCE`/`DEDUCTION`/`REVERSAL`) é enum, não tabela de domínio: é
+vocabulário fixo do sistema (como se soma ou subtrai do saldo), não varia por tenant —
+diferente de `deductionReasonId`, que aponta pra `DeductionReason` (D-020, mesmo padrão
+`QuoteStatus`/`TripStatus`) porque o motivo do desconto varia por transportadora.
+`grossAmount`/`netAmount` são sempre positivos — o sinal vem de `type`, nunca do
+número. `netAmount` separado de `grossAmount` porque pagamento a TAC pessoa física tem
+retenção; não retrofita bem se nascer junto no mesmo campo.
+
+`CHECK` no banco amarra `type = 'DEDUCTION'` a `deductionReasonId IS NOT NULL` (nos
+dois sentidos) — garantido pelo banco, não por disciplina da aplicação, mesmo critério
+de D-012/D-014/D-029. `UPDATE`/`DELETE` revogados por inteiro em `CarrierPayment`
+(não `GRANT` de coluna como `FreightRate`/`Quote`/`CarrierHire`): nenhuma coluna aqui
+legitimamente muda depois de criada — correção é `REVERSAL`, linha nova.
+
+**Vale-pedágio nunca entra no cálculo.** Por lei não compõe o valor do frete nem a
+base de tributo — não é frete, não é desconto. Se entrasse em `agreedFreight` ou
+virasse `CarrierPayment` tipo `DEDUCTION`, contaminaria a base de tributo. Por isso
+vive só em `CarrierHire`, fora do livro de eventos.
+
+**Pendência:** confirmar o leiaute exato do grupo de vale-pedágio do MDF-e com o
+provedor antes de fechar quais campos são obrigatórios, e se falta campo de tipo do
+vale. Se uma viagem puder ter mais de uma compra de vale-pedágio, os três campos viram
+tabela 1:N — não modelado agora, custo baixo de adiar (D-020).
+
 ## Pendências
 
 ### Bloqueantes
@@ -873,6 +922,7 @@ Respondido pelo sócio, com base nas duas transportadoras da consultoria:
 ### Técnicas
 - [ ] Onde entram testes automatizados, e quais primeiro
 - [ ] Defesas concretas contra degradação da base ao longo dos meses
+- [ ] Confirmar leiaute exato do grupo de vale-pedágio do MDF-e com o provedor (D-032)
 
 ### A observar no operacional
 - [ ] Coletar **todas as planilhas paralelas**, com dados reais dentro
@@ -880,3 +930,5 @@ Respondido pelo sócio, com base nas duas transportadoras da consultoria:
       comum, `Trip` precisa de sequência dentro do pedido
 - [ ] Como a apólice de seguro restringe tipos de carga, e se isso precisa estar no
       sistema
+- [ ] Se uma viagem pode ter mais de uma compra de vale-pedágio (D-032 modela 1:1 por
+      ora — vira tabela 1:N se a resposta for sim)

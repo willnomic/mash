@@ -33,6 +33,9 @@ model Tenant {
   tripStatuses  TripStatus[]
   trips         Trip[]
   riskClearances RiskClearance[]
+  deductionReasons DeductionReason[]
+  carrierHires     CarrierHire[]
+  carrierPayments  CarrierPayment[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
@@ -48,6 +51,7 @@ model Branch {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   orders    Order[]
   trips     Trip[]
+  carrierHires CarrierHire[]
 
   @@index([tenantId])
 }
@@ -119,6 +123,10 @@ model Customer {
   ordersAsSender    Order[] @relation("OrderSender")
   ordersAsRecipient Order[] @relation("OrderRecipient")
   ordersAsTomador   Order[] @relation("OrderTomador")
+  // Terceiro é uma parte que exerce papel (D-018 aplicado a D-019), não
+  // cadastro próprio — reaproveita Customer (já cobre PF/CPF e PJ/CNPJ,
+  // exatamente TAC/ETC), papel vive em CarrierHire, não aqui.
+  carrierHiresAsThirdParty CarrierHire[] @relation("CarrierHireThirdParty")
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnpj])
@@ -516,8 +524,135 @@ model Trip {
   status             TripStatus     @relation(fields: [statusId], references: [id])
   createdAt          DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+  // Contratação de terceiro (D-019) — 1:1, só existe quando a viagem é
+  // terceirizada. FK vive em CarrierHire (dependente carrega a
+  // referência), não aqui — mesmo critério de Address -> Customer.
+  carrierHire        CarrierHire?
 
   @@index([tenantId, branchId])
   @@index([tenantId, orderId])
   @@index([tenantId, statusId])
+}
+
+// Motivo de desconto no pagamento ao terceiro: avaria, diária, multa,
+// abastecimento descontado do frete (D-026). Lista de domínio em
+// tabela, não enum (D-020) — varia por tenant. Mesmo padrão de
+// QuoteStatus/TripStatus: tenantId nulo = padrão do sistema.
+model DeductionReason {
+  id        String   @id @db.Uuid
+  tenantId  String?  @db.Uuid
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  code      String
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  payments  CarrierPayment[]
+
+  @@unique([tenantId, code])
+}
+
+// Tipo de evento do livro de pagamento ao terceiro (D-019) — vocabulário
+// fixo do sistema (como se soma ou subtrai do saldo), não varia por
+// tenant, por isso enum e não tabela (D-020, mesmo critério de UserRole).
+enum PaymentEventType {
+  ADVANCE
+  BALANCE
+  DEDUCTION
+  REVERSAL
+}
+
+// Contratação da viagem com terceiro (D-019). branchId obrigatório:
+// movimento é da filial (D-011), mesmo critério de Order/Trip.
+//
+// Só agreedFreight é valor congelado aqui (D-014). Adiantamento e saldo
+// não são coluna: saldo é derivado somando CarrierPayment (nunca
+// gravado) — cada parcela ou desconto como coluna única viraria UPDATE
+// em valor financeiro, proibido pelo histórico de D-017.
+//
+// CIOT e vale-pedágio são preenchidos depois da contratação (emitidos
+// fora do sistema, antes da viagem sair) — por isso são as únicas
+// colunas com UPDATE liberado (GRANT por coluna na migração), junto de
+// updatedAt. tripId/thirdPartyId/agreedFreight congelam, mesmo mecanismo
+// do Quote.
+//
+// DELETE revogado: é histórico financeiro (D-017).
+model CarrierHire {
+  id           String   @id @db.Uuid
+  tenantId     String   @db.Uuid
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  branchId     String   @db.Uuid
+  branch       Branch   @relation(fields: [branchId], references: [id])
+  tripId       String   @unique @db.Uuid
+  trip         Trip     @relation(fields: [tripId], references: [id])
+  thirdPartyId String   @db.Uuid
+  thirdParty   Customer @relation("CarrierHireThirdParty", fields: [thirdPartyId], references: [id])
+
+  // Escala de valor final (D-013).
+  agreedFreight Decimal @db.Decimal(14, 2)
+
+  // CIOT existe na contratação de TAC, não de ETC (nullable). Só o
+  // número: os valores do CIOT já estão em agreedFreight/CarrierPayment
+  // — gravar de novo seria segunda fonte de verdade sobre o mesmo
+  // dinheiro.
+  ciotNumber String?
+
+  // Vale-pedágio NUNCA compõe o frete nem vira CarrierPayment tipo
+  // DEDUCTION — não é frete, não é desconto; entrar contaminaria a base
+  // de tributo. Layout mínimo exigido pelo MDF-e (D-028): CNPJ da
+  // fornecedora, número da compra, valor. Confirmar leiaute exato com o
+  // provedor antes de fechar obrigatoriedade — por ora tudo opcional.
+  tollVoucherSupplierCnpj   String?  @db.VarChar(14)
+  tollVoucherPurchaseNumber String?
+  tollVoucherAmount         Decimal? @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  payments  CarrierPayment[]
+
+  @@index([tenantId, branchId])
+}
+
+// Evento de pagamento ao terceiro — livro append-only (D-017: nenhuma
+// parcela ou desconto financeiro sofre UPDATE; correção é estorno, linha
+// nova, nunca edição da linha original). Saldo do CarrierHire é
+// SUM(grossAmount) com sinal dado por type, nunca coluna.
+//
+// grossAmount/netAmount sempre positivos — o sinal/direção vem de type,
+// nunca do número (mesmo critério de "banco garante, não confiar em
+// disciplina" do D-012/D-014/D-029). netAmount é o que foi efetivamente
+// transferido — pagamento a TAC pessoa física tem retenção, por isso
+// separado do valor bruto que compõe o saldo.
+//
+// Sem branchId: é filho de CarrierHire, que já carrega — mesmo critério
+// do Address não duplicar o que o Customer já modela.
+//
+// UPDATE e DELETE revogados por inteiro (não GRANT de coluna como
+// FreightRate/Quote/CarrierHire): nenhuma coluna aqui legitimamente
+// muda depois de criada.
+model CarrierPayment {
+  id            String           @id @db.Uuid
+  tenantId      String           @db.Uuid
+  tenant        Tenant           @relation(fields: [tenantId], references: [id])
+  carrierHireId String           @db.Uuid
+  carrierHire   CarrierHire      @relation(fields: [carrierHireId], references: [id])
+  type          PaymentEventType
+
+  grossAmount Decimal  @db.Decimal(14, 2)
+  netAmount   Decimal? @db.Decimal(14, 2)
+
+  deductionReasonId String?          @db.Uuid
+  deductionReason   DeductionReason? @relation(fields: [deductionReasonId], references: [id])
+
+  // Data de calendário, não timestamp (D-016) — data do pagamento não
+  // tem hora própria relevante ao domínio.
+  paymentDate DateTime @db.Date
+  // Texto livre: sem vocabulário estável o bastante pra fixar em enum
+  // agora (seção 1.6) — diferente de PaymentEventType, que é lógica do
+  // sistema, não convenção bancária.
+  paymentMethod String?
+  reference     String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([tenantId, carrierHireId])
 }
