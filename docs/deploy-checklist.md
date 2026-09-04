@@ -43,6 +43,19 @@ nada aqui foi verificado em produção ainda.
       ignora a política). Configurar como dois secrets distintos na plataforma, nunca
       um só reaproveitado para os dois papéis.
 
+- [ ] **`npm install`/`npm ci` exige `--legacy-peer-deps`.**
+      `nestjs-cls@6.2.2` (versão mais recente publicada — confirmado via `npm view
+      nestjs-cls versions/peerDependencies` nesta sessão) declara peer
+      `@nestjs/common`/`@nestjs/core` `>= 10 < 12`; o projeto usa Nest 12.0.1. Instalação
+      sem a flag falha com `ERESOLVE`. Verificado localmente: `npm install
+      --legacy-peer-deps` resolve para a mesma árvore já travada em
+      `package-lock.json`, e as duas suítes (97 testes) passam depois. Se o passo de
+      build da plataforma de deploy rodar `npm ci`/`npm install` sem essa flag, vai
+      bater no mesmo erro — confirmar que o comando de build da plataforma inclui
+      `--legacy-peer-deps`, ou configurar via variável/arquivo equivalente. Não há
+      release do `nestjs-cls` com suporte declarado a Nest 12 até o momento desta
+      verificação; revisitar se isso mudar.
+
 - [ ] **Role `mash_app` criado manualmente, fora de qualquer migração.**
       `docker/init-db.sql` cria o role `mash_app` só no ambiente local (roda uma vez,
       na criação do container). Em produção isso **não acontece sozinho** — é passo

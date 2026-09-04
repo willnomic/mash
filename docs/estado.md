@@ -122,3 +122,21 @@ Dentro do escopo v1 (D-028), ainda faltam:
   reverificado após a reinstalação de hoje** — o `npm audit` foi cancelado por timeout
   de rede contra o registry; os números da última verificação real não foram
   confirmados de novo nesta sessão.
+- **`nestjs-cls@6.2.2` não declara suporte a NestJS 12.** Peer declarado é
+  `@nestjs/common`/`@nestjs/core` `>= 10 < 12`; confirmado via `npm view nestjs-cls
+  peerDependencies` que é a versão mais recente publicada, sem release compatível
+  disponível. `npm install` puro falha com `ERESOLVE`. `package-lock.json` já registrava
+  essa combinação (nestjs-cls 6.2.2 + Nest 12.0.1) antes da perda do `.git`, sem
+  `.npmrc`/`overrides` no repo que explique como — a instalação original deve ter usado
+  `--legacy-peer-deps` ou `--force` sem registro. **Reinstalação desta sessão usou
+  `npm install --legacy-peer-deps`** (confirmado com o usuário antes de aplicar); as duas
+  suítes passaram depois (97 testes, incluindo os `*-rls.e2e-spec.ts` que exercitam
+  `ClsService`/`TenantPrisma`), o que dá evidência funcional — mas o peer em si continua
+  não declarado como compatível rio acima. Revisitar se o Nest for atualizado de novo ou
+  se o `nestjs-cls` publicar suporte a v12.
+- **`.env` não está no repositório** (correto — é `.gitignore`d), só `.env.example`.
+  Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
+  dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
+- **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (11 migrações) antes
+  da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
