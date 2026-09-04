@@ -234,13 +234,31 @@ Duas camadas distintas, ambas necessárias. Confundi-las é o erro clássico de 
 
 ### Vigência na tabela de preço
 
-Tarifa tem `validFrom` e `validTo`. **Nunca há UPDATE numa tarifa.** Alterar preço
+Tarifa tem `validFrom` e `validTo`. **Nunca há UPDATE nos valores da tarifa nem na
+identidade da linha** (`tenantId`, `customerId`, `laneId`, `validFrom`). Alterar preço
 significa fechar a linha vigente e inserir outra. A tabela vira registro de auditoria
 por construção, e responde tanto "qual era o preço em 12/03" quanto "qual entra em
 vigor mês que vem".
 
-O risco é sobreposição: duas linhas válidas para o mesmo trecho na mesma data, com o
-preço dependendo de qual o banco retornou primeiro. Resolvido na definição da tabela:
+**Correção 04/09/2026:** a redação original dizia "nunca há UPDATE numa tarifa", cheia,
+sem exceção — mas "fechar a linha vigente" só é possível **alterando `validTo`** da
+linha antiga, o que é um UPDATE. A imutabilidade é sobre os valores e a identidade da
+linha, não sobre o campo de fechamento. Garantido no banco, não só por disciplina —
+mesmo critério do RLS: em vez de confiar em ninguém rodar `UPDATE` errado, a permissão
+de `UPDATE` do role de aplicação cobre **só** `validTo` e `updatedAt`:
+
+```sql
+GRANT UPDATE ("validTo", "updatedAt") ON "FreightRate" TO mash_app;
+```
+
+Sem `GRANT UPDATE` geral na tabela. Qualquer tentativa de alterar tarifa, frete
+mínimo, `tenantId`, `customerId`, `laneId` ou `validFrom` falha na hora — Postgres
+recusa o `UPDATE` inteiro se o `SET` tocar qualquer coluna fora da lista concedida, sem
+precisar de trigger nem lógica própria pra manter.
+
+O risco separado é sobreposição: duas linhas válidas para o mesmo trecho na mesma data,
+com o preço dependendo de qual o banco retornou primeiro. Resolvido na definição da
+tabela:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS btree_gist;

@@ -25,6 +25,8 @@ model Tenant {
   addresses Address[]
   drivers   Driver[]
   vehicles  Vehicle[]
+  lanes     Lane[]
+  freightRates FreightRate[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
@@ -103,6 +105,7 @@ model Customer {
   createdAt  DateTime   @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
   addresses  Address[]
+  freightRates FreightRate[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnpj])
@@ -216,4 +219,60 @@ model Vehicle {
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
   @@index([tenantId, active])
+}
+
+// Trecho origem-destino para precificação — independente de Customer ou
+// Address (D-018 lista Lane como cadastro próprio, não sub-entidade).
+// Inglês (D-007): city/state são conceitos geográficos genéricos, sem
+// vocabulário fiscal a preservar — diferente de Address, que precisa
+// bater com o schema de NF-e/CT-e. Sem branchId: cadastro é da empresa
+// (D-011).
+model Lane {
+  id                   String        @id @db.Uuid
+  tenantId             String        @db.Uuid
+  tenant               Tenant        @relation(fields: [tenantId], references: [id])
+  originCity           String
+  originState          String        @db.Char(2)
+  destinationCity      String
+  destinationState     String        @db.Char(2)
+  createdAt            DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime      @updatedAt @db.Timestamptz(3)
+  freightRates         FreightRate[]
+
+  @@unique([tenantId, originCity, originState, destinationCity, destinationState])
+  @@index([tenantId])
+}
+
+// Tabela de preço com vigência (D-014). Sem branchId: tabela de preço é da
+// empresa (D-011).
+//
+// Imutabilidade garantida no banco, não por disciplina: o role de
+// aplicação só tem UPDATE liberado em validTo e updatedAt (GRANT por
+// coluna, na migração) — tarifa, valor, e a identidade da linha
+// (tenantId/customerId/laneId/validFrom) nunca podem ser alteradas depois
+// de criadas. "Fechar a linha vigente" é o único UPDATE possível.
+//
+// Sobreposição de vigência para o mesmo tenant+customer+lane é bloqueada
+// por EXCLUDE USING gist na migração (btree_gist) — não por validação na
+// aplicação.
+model FreightRate {
+  id         String   @id @db.Uuid
+  tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  customerId String   @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id])
+  laneId     String   @db.Uuid
+  lane       Lane     @relation(fields: [laneId], references: [id])
+  // Data de calendário, não timestamp (D-016) — vigência não tem hora.
+  validFrom  DateTime @db.Date
+  validTo    DateTime @db.Date
+  // Escalas de D-013. Decimal sempre — nunca number: a+b concatena string
+  // em vez de somar (testado abaixo).
+  rate                 Decimal @db.Decimal(18, 6)
+  minimumFreight       Decimal @db.Decimal(14, 2)
+  additionalPercentage Decimal @db.Decimal(7, 4)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([tenantId, customerId, laneId])
 }
