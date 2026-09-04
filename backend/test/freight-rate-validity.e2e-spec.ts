@@ -200,4 +200,24 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
 
     expect(closed.validTo.toISOString().slice(0, 10)).toBe('2026-07-01');
   });
+
+  it('impede apagar tarifa — erro de cadastro se corrige fechando validTo', async () => {
+    const rate = await forTenant(tenant.id).freightRate.create({
+      data: {
+        id: uuidv7(),
+        tenantId: tenant.id,
+        customerId: customer.id,
+        laneId: lane.id,
+        validFrom: new Date('2026-01-01'),
+        validTo: new Date('9999-12-31'),
+        rate: '150.5',
+        minimumFreight: '500',
+        additionalPercentage: '2.5',
+      },
+    });
+
+    await expect(
+      forTenant(tenant.id).freightRate.delete({ where: { id: rate.id } }),
+    ).rejects.toThrow();
+  });
 });

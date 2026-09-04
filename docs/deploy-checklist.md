@@ -1,0 +1,65 @@
+# Checklist de deploy
+
+Itens que só aparecem em produção — nunca apareceram em dev local porque o ambiente
+local (Docker, `docker-compose.yml`) tem privilégio ou configuração que a plataforma
+gerenciada (Railway ou Render, D-005) pode não ter. Cada item tem a origem de onde foi
+identificado, para não virar afirmação solta.
+
+Preencher a coluna de resultado só depois de checar de verdade contra a plataforma —
+nada aqui foi verificado em produção ainda.
+
+---
+
+## Antes do primeiro deploy
+
+- [ ] **`CREATE EXTENSION btree_gist` sem superuser.**
+      A migração `20260904073246_add_lane_freight_rate` roda `CREATE EXTENSION IF NOT
+      EXISTS btree_gist` (necessária para o `EXCLUDE USING gist` de `FreightRate`,
+      D-014). Verificado nesta sessão que `mash_owner` é superuser no Postgres local
+      (o Docker cria o `POSTGRES_USER` como superuser por padrão) — **não verificado**
+      se o role de dono entregue por Railway/Render tem privilégio para instalar
+      extensão. A maioria das plataformas gerenciadas permite extensões "trusted"
+      (btree_gist é uma delas) para o dono do banco sem superuser pleno, mas isso não
+      foi confirmado contra a plataforma real escolhida — checar antes de rodar
+      `prisma migrate deploy` em produção. Se não for permitido, a migração falha no
+      meio, com as tabelas anteriores já criadas — não é reversível sem intervenção.
+
+- [ ] **Versão do Node exigida pelo `@angular-devkit` (dependência do `@nestjs/cli`).**
+      `npm install` no `backend/` emite `EBADENGINE`: `@angular-devkit/core`,
+      `@angular-devkit/schematics` e `@angular-devkit/schematics-cli` exigem
+      `node ^22.22.3 || ^24.15.0 || >=26.0.0`; a máquina de desenvolvimento roda
+      `v22.20.0` (abaixo do mínimo da faixa 22.x). Hoje é só aviso, não erro — mas se
+      o passo de build da plataforma de deploy usa `npm ci` com engine mais estrito,
+      ou se a imagem de build tiver uma versão de Node diferente da local, o build
+      pode falhar em vez de só avisar. Confirmar a versão de Node da plataforma de
+      deploy antes do primeiro build, e alinhar (`engines` no `package.json`, ou
+      variável de versão do Node na plataforma).
+
+- [ ] **As duas URLs de banco, como segredos separados na plataforma.**
+      `DATABASE_URL` (dono — só `prisma migrate deploy`, nunca a aplicação em runtime)
+      e `DATABASE_URL_APP` (role `mash_app`, sem posse de tabela — usado por
+      `backend/src/prisma/prisma-tenant.ts` em toda consulta). Confundir as duas
+      credenciais desliga o RLS silenciosamente (D-012, armadilha 1: o dono da tabela
+      ignora a política). Configurar como dois secrets distintos na plataforma, nunca
+      um só reaproveitado para os dois papéis.
+
+- [ ] **Role `mash_app` criado manualmente, fora de qualquer migração.**
+      `docker/init-db.sql` cria o role `mash_app` só no ambiente local (roda uma vez,
+      na criação do container). Em produção isso **não acontece sozinho** — é passo
+      manual, documentado em `docs/d012-multi-tenant-rls.md` (Passo 1), a ser feito
+      uma vez contra o banco gerenciado antes do primeiro `prisma migrate deploy`.
+      **Ordem importa:** várias migrações têm `GRANT`/`REVOKE ... TO/FROM mash_app`
+      (ex.: `20260904004121_init_tenant`, `20260904073246_add_lane_freight_rate`,
+      `20260904073936_revoke_freight_rate_delete`) — se o role não existir ainda
+      quando essas migrações rodarem, elas falham. Criar o role é *pré-requisito* do
+      primeiro deploy, não um passo qualquer da lista.
+
+---
+
+## Não coberto por este checklist
+
+Este documento junta só os itens já encontrados construindo o backend até aqui — não é
+um checklist geral de deploy (SSL do banco, backup, monitoramento, variáveis de
+ambiente de terceiros como o provedor fiscal de D-006, etc.). Completar conforme
+aparecer, com a mesma disciplina: item aqui só depois de identificado de verdade, não
+antecipado de memória.

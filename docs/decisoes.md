@@ -256,6 +256,13 @@ mínimo, `tenantId`, `customerId`, `laneId` ou `validFrom` falha na hora — Pos
 recusa o `UPDATE` inteiro se o `SET` tocar qualquer coluna fora da lista concedida, sem
 precisar de trigger nem lógica própria pra manter.
 
+**`DELETE` também é revogado do role de aplicação** (`REVOKE DELETE ON "FreightRate"
+FROM mash_app`, 04/09/2026). Tarifa é histórico financeiro — cotação e fatura, quando
+existirem, referenciam a linha, e apagar quebra a rastreabilidade do preço aplicado
+(D-017: movimento financeiro nunca se apaga). Erro de cadastro se corrige fechando
+`validTo` (o único `UPDATE` permitido), nunca apagando a linha. `mash_app` mantém
+`SELECT` e `INSERT`.
+
 O risco separado é sobreposição: duas linhas válidas para o mesmo trecho na mesma data,
 com o preço dependendo de qual o banco retornou primeiro. Resolvido na definição da
 tabela:
