@@ -78,19 +78,69 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
     ).rejects.toThrow();
   });
 
-  it('libera atualizar CIOT e vale-pedágio depois da contratação', async () => {
+  it('libera atualizar CIOT depois da contratação', async () => {
     const updated = await forTenant(seed.tenant.id).carrierHire.update({
       where: { id: hire.id },
+      data: { ciotNumber: '12345678901234567890123456' },
+    });
+
+    expect(updated.ciotNumber).toBe('12345678901234567890123456');
+  });
+
+  it('vale-pedágio é registrado como compra separada (D-036) — mais de uma compra na mesma contratação', async () => {
+    const tenantPrisma = forTenant(seed.tenant.id);
+    const first = await tenantPrisma.tollVoucherPurchase.create({
       data: {
-        ciotNumber: '12345678901234567890123456',
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
+        tollVoucherSupplierCnpj: '11444777000161',
+        tollVoucherPurchaseNumber: 'VP-001',
+        tollVoucherAmount: '450.30',
+      },
+    });
+    const second = await tenantPrisma.tollVoucherPurchase.create({
+      data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
+        tollVoucherSupplierCnpj: '11444777000161',
+        tollVoucherPurchaseNumber: 'VP-002',
+        tollVoucherAmount: '120.00',
+      },
+    });
+
+    expect(first.tollVoucherAmount?.toString()).toBe('450.3');
+    expect(second.tollVoucherAmount?.toString()).toBe('120');
+
+    const purchases = await tenantPrisma.tollVoucherPurchase.findMany({
+      where: { carrierHireId: hire.id },
+    });
+    expect(purchases).toHaveLength(2);
+  });
+
+  it('vale-pedágio é append-only: impede UPDATE e DELETE', async () => {
+    const purchase = await forTenant(seed.tenant.id).tollVoucherPurchase.create({
+      data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
         tollVoucherSupplierCnpj: '11444777000161',
         tollVoucherPurchaseNumber: 'VP-001',
         tollVoucherAmount: '450.30',
       },
     });
 
-    expect(updated.ciotNumber).toBe('12345678901234567890123456');
-    expect(updated.tollVoucherAmount?.toString()).toBe('450.3');
+    await expect(
+      forTenant(seed.tenant.id).tollVoucherPurchase.update({
+        where: { id: purchase.id },
+        data: { tollVoucherAmount: '1' },
+      }),
+    ).rejects.toThrow();
+
+    await expect(
+      forTenant(seed.tenant.id).tollVoucherPurchase.delete({ where: { id: purchase.id } }),
+    ).rejects.toThrow();
   });
 
   it('impede apagar CarrierHire — histórico financeiro nunca se apaga (D-017)', async () => {
@@ -107,6 +157,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '1000',
+        netAmount: '1000',
         paymentDate: new Date('2026-01-10'),
       },
     });
@@ -127,6 +178,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '1000',
+        netAmount: '1000',
         paymentDate: new Date('2026-01-10'),
       },
     });
@@ -145,6 +197,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
           carrierHireId: hire.id,
           type: 'DEDUCTION',
           grossAmount: '200',
+          netAmount: '200',
           paymentDate: new Date('2026-01-10'),
         },
       }),
@@ -160,10 +213,22 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
           carrierHireId: hire.id,
           type: 'ADVANCE',
           grossAmount: '200',
+          netAmount: '200',
           deductionReasonId: damageReasonId,
           paymentDate: new Date('2026-01-10'),
         },
       }),
+    ).rejects.toThrow();
+  });
+
+  it('recusa criar pagamento sem netAmount — NOT NULL no banco', async () => {
+    // Prisma Client já recusaria isso em tempo de compilação (netAmount é
+    // obrigatório no schema) — INSERT cru prova que a garantia é do
+    // banco, não só do tipo TypeScript.
+    await expect(
+      forTenant(seed.tenant.id)
+        .$executeRaw`INSERT INTO "CarrierPayment" (id, "tenantId", "carrierHireId", "type", "grossAmount", "paymentDate")
+          VALUES (${uuidv7()}, ${seed.tenant.id}, ${hire.id}, 'ADVANCE', 1000, ${new Date('2026-01-10')})`,
     ).rejects.toThrow();
   });
 
@@ -176,6 +241,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '1000',
+        netAmount: '1000',
         paymentDate: new Date('2026-01-05'),
       },
     });
@@ -186,6 +252,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '500',
+        netAmount: '500',
         paymentDate: new Date('2026-01-15'),
       },
     });
@@ -196,6 +263,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'DEDUCTION',
         grossAmount: '200',
+        netAmount: '200',
         deductionReasonId: damageReasonId,
         paymentDate: new Date('2026-01-20'),
       },
@@ -218,6 +286,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
           carrierHireId: hire.id,
           type: 'REVERSAL',
           grossAmount: '1000',
+          netAmount: '1000',
           paymentDate: new Date('2026-01-06'),
         },
       }),
@@ -233,6 +302,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '1000',
+        netAmount: '1000',
         paymentDate: new Date('2026-01-05'),
       },
     });
@@ -245,6 +315,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
           carrierHireId: hire.id,
           type: 'ADVANCE',
           grossAmount: '500',
+          netAmount: '500',
           reversesPaymentId: advance.id,
           paymentDate: new Date('2026-01-06'),
         },
@@ -261,6 +332,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '1000',
+        netAmount: '1000',
         paymentDate: new Date('2026-01-05'),
       },
     });
@@ -271,6 +343,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'REVERSAL',
         grossAmount: '1000',
+        netAmount: '1000',
         reversesPaymentId: advance.id,
         paymentDate: new Date('2026-01-06'),
       },
@@ -284,6 +357,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
           carrierHireId: hire.id,
           type: 'REVERSAL',
           grossAmount: '1000',
+          netAmount: '1000',
           reversesPaymentId: advance.id,
           paymentDate: new Date('2026-01-07'),
         },
@@ -307,6 +381,62 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
     ).rejects.toThrow();
   });
 
+  it('sem retenção, netAmount = grossAmount — SUM(netAmount) bate com o valor cheio', async () => {
+    const tenantPrisma = forTenant(seed.tenant.id);
+    await tenantPrisma.carrierPayment.create({
+      data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
+        type: 'ADVANCE',
+        grossAmount: '1000',
+        netAmount: '1000',
+        paymentDate: new Date('2026-01-05'),
+      },
+    });
+
+    const payments = await tenantPrisma.carrierPayment.findMany({
+      where: { carrierHireId: hire.id },
+    });
+    const netTotal = payments.reduce(
+      (sum, p) => sum.plus(p.netAmount),
+      new Prisma.Decimal(0),
+    );
+
+    expect(netTotal.toString()).toBe('1000');
+  });
+
+  it('com retenção, SUM(netAmount) reflete o valor líquido, não o bruto', async () => {
+    const tenantPrisma = forTenant(seed.tenant.id);
+    // Pagamento a TAC pessoa física com retenção: bruto 1000, líquido 900.
+    await tenantPrisma.carrierPayment.create({
+      data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
+        type: 'ADVANCE',
+        grossAmount: '1000',
+        netAmount: '900',
+        paymentDate: new Date('2026-01-05'),
+      },
+    });
+
+    const payments = await tenantPrisma.carrierPayment.findMany({
+      where: { carrierHireId: hire.id },
+    });
+    const grossTotal = payments.reduce(
+      (sum, p) => sum.plus(p.grossAmount),
+      new Prisma.Decimal(0),
+    );
+    const netTotal = payments.reduce(
+      (sum, p) => sum.plus(p.netAmount),
+      new Prisma.Decimal(0),
+    );
+
+    expect(grossTotal.toString()).toBe('1000');
+    expect(netTotal.toString()).toBe('900');
+  });
+
   it('estorno válido devolve o saldo ao valor anterior', async () => {
     const tenantPrisma = forTenant(seed.tenant.id);
     const advance = await tenantPrisma.carrierPayment.create({
@@ -316,6 +446,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '1000',
+        netAmount: '1000',
         paymentDate: new Date('2026-01-05'),
       },
     });
@@ -330,6 +461,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'REVERSAL',
         grossAmount: '1000',
+        netAmount: '1000',
         reversesPaymentId: advance.id,
         paymentDate: new Date('2026-01-06'),
       },
@@ -352,12 +484,15 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'ADVANCE',
         grossAmount: '1000',
+        netAmount: '1000',
         paymentDate: new Date('2026-01-05'),
       },
     });
-    await tenantPrisma.carrierHire.update({
-      where: { id: hire.id },
+    await tenantPrisma.tollVoucherPurchase.create({
       data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
         tollVoucherSupplierCnpj: '11444777000161',
         tollVoucherPurchaseNumber: 'VP-001',
         tollVoucherAmount: '450.30',

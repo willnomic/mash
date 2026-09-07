@@ -22,7 +22,7 @@ async function seedClearance(seed: Awaited<ReturnType<typeof seedOrderScenario>>
       ownerName: 'Transportadora Própria Ltda',
       checkDate: new Date('2026-01-01'),
       validUntil: new Date('2027-01-01'),
-      result: 'Recomendado',
+      result: 'RECOMENDADO',
     },
   });
 }
@@ -77,7 +77,7 @@ describe('RiskClearance · Row-Level Security (D-012)', () => {
           ownerName: 'Forjado',
           checkDate: new Date('2026-01-01'),
           validUntil: new Date('2027-01-01'),
-          result: 'Recomendado',
+          result: 'RECOMENDADO',
         },
       }),
     ).rejects.toThrow();
@@ -89,6 +89,29 @@ describe('RiskClearance · Row-Level Security (D-012)', () => {
     await expect(
       forTenant(a.tenant.id).riskClearance.delete({
         where: { id: clearance.id },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('impede alterar result depois de criada — uma ficha não pode mudar de resultado em silêncio (D-023, D-017)', async () => {
+    const clearance = await forTenant(a.tenant.id).riskClearance.findFirstOrThrow();
+    expect(clearance.result).toBe('RECOMENDADO');
+
+    await expect(
+      forTenant(a.tenant.id).riskClearance.update({
+        where: { id: clearance.id },
+        data: { result: 'NAO_RECOMENDADO' },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('impede alterar checkDate e validUntil depois de criada', async () => {
+    const clearance = await forTenant(a.tenant.id).riskClearance.findFirstOrThrow();
+
+    await expect(
+      forTenant(a.tenant.id).riskClearance.update({
+        where: { id: clearance.id },
+        data: { checkDate: new Date('2026-06-01'), validUntil: new Date('2028-01-01') },
       }),
     ).rejects.toThrow();
   });

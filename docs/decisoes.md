@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 08/09/2026 (D-035)
+Atualizado em 08/09/2026 (D-036)
 
 ---
 
@@ -1254,6 +1254,124 @@ e2e-spec.ts` + `order-numbering.e2e-spec.ts`) mais os 5 do guarda de `transactio
 descrito acima (`tenant-prisma-transaction-rls.e2e-spec.ts`), sobre a base de 158 que
 já passava antes desta unidade.
 
+---
+
+## D-036 · Auditoria de modelo (08/09/2026): `RiskClearance` imutável, `CarrierPayment.netAmount` obrigatório
+**Status:** Fechada
+
+Corrige dois achados de uma auditoria de modelo pedida pelo usuário (não implementação —
+os quatro achados e o raciocínio completo estão só na conversa, não num arquivo). Escopo
+desta unidade: os dois primeiros, os mais caros de reverter com dado real dentro. O
+terceiro (`CarrierHire.tollVoucherAmount` mutável sem histórico) está em aberto,
+aguardando o usuário escolher entre revogar `UPDATE` ou mover pra tabela filha
+append-only. O quarto (`Order` sem status/cancelamento) não foi endereçado — o usuário
+pediu para não escrever ainda.
+
+### `RiskClearance`: `result` vira enum fechado, `UPDATE` revogado por inteiro
+
+`result` era `String` livre e a tabela só revogava `DELETE` (D-023/D-017) — `UPDATE`
+ficou aberto. A migração original (`add_trip`) revogava `DELETE` em `RiskClearance` e
+`Trip` juntas, com um comentário só sobre `Trip` ("status, liberação de risco e
+composição de veículo mudam legitimamente ao longo da viagem") — raciocínio que nunca se
+aplicou a `RiskClearance`, só foi herdado por estar no mesmo `REVOKE`. Consequência: uma
+ficha `"não recomendado"` podia virar `"liberado"` depois do fato, sem rastro — o mesmo
+risco que já tinha justificado revogar `DELETE`: "o não cumprimento faz perder o direito
+à indenização em caso de sinistro" (D-023).
+
+`result` passa a `enum RiskClearanceResult` (`RECOMENDADO`/`NAO_RECOMENDADO`/
+`INEXISTENTE`/`NAO_AUTORIZADO`) — os três negativos são citados nominalmente pela D-023;
+o positivo (`RECOMENDADO`) não tem citação textual na decisão, foi inferido do padrão
+"não-X" e confirmado pelo dado de teste que já existia no repositório antes desta mudança
+(`result: 'Recomendado'` em `risk-clearance-rls.e2e-spec.ts`). Fixo pelo sistema, não por
+tenant (D-020, mesma exceção de `AnttCategory`/`CarrierBondType`) — é o resultado
+normalizado que o operador registra depois de consultar qualquer gerenciadora, não o
+texto cru de cada provedor.
+
+`UPDATE` revogado por inteiro (`REVOKE UPDATE ON "RiskClearance" FROM mash_app`, sem
+`GRANT` de coluna) — a ficha nasce completa (D-023: número, motorista, veículo,
+proprietário, data, validade, resultado), não em rascunho, e nenhuma coluna legitimamente
+muda depois de criada. Mesmo critério de `CarrierPayment`/`PickupOrder` (D-017), não o de
+`FreightRate`/`Quote`/`CarrierHire` (que têm colunas com `GRANT` específico porque algo
+ali muda de propósito depois da criação — aqui não há esse caso).
+
+Migração `20260908010000_risk_clearance_result_enum_and_immutability`. Sem dado real a
+migrar — `DROP COLUMN`/`ADD COLUMN` em vez de cast, mesmo critério já usado quando não há
+produção envolvida.
+
+### `CarrierPayment.netAmount` vira `NOT NULL`
+
+Era `Decimal?`. O `CHECK "netAmount" <= "grossAmount"` não pega linha com `netAmount`
+nulo — Postgres aprova `CHECK` sempre que a comparação avalia `NULL` — e um
+`SUM(netAmount)` excluiria essas linhas em silêncio, subestimando o valor líquido pago a
+um terceiro. Nada no banco distinguia "sem retenção" (deveria contar como bruto) de "não
+informado" (bug).
+
+`netAmount` passa a `NOT NULL`. Sem retenção, `netAmount = grossAmount`, preenchido
+explicitamente por quem grava — nunca inferido pelo banco (não há trigger, D-030). O
+`CHECK "CarrierPayment_netAmount_positive"` foi recriado sem a cláusula `IS NULL OR`,
+redundante agora que a coluna é obrigatória.
+
+Migração `20260908020000_carrier_payment_net_amount_not_null`. Ainda não há dado real nem
+serviço/controller de `CarrierPayment` (`docs/estado.md`) — `ALTER COLUMN SET NOT NULL`
+direto, sem backfill.
+
+### `CarrierHire.tollVoucher*` vira tabela filha append-only: `TollVoucherPurchase`
+
+Terceiro achado, com duas opções apresentadas ao usuário (custo de cada uma, ver
+conversa): (a) revogar `UPDATE` nas três colunas — mais barato agora, mas exige que o
+vale-pedágio seja conhecido no momento da criação do `CarrierHire`, contradizendo o que a
+D-032 já tinha documentado ("emitido fora do sistema depois da contratação existir"); ou
+(b) mover os três campos pra tabela filha append-only. Usuário escolheu (b).
+
+`tollVoucherSupplierCnpj`/`tollVoucherPurchaseNumber`/`tollVoucherAmount` saem de
+`CarrierHire` e viram `TollVoucherPurchase` — tabela filha, 1:N com `CarrierHire` (FK
+`carrierHireId`), mesmo padrão de `CarrierPayment`: `UPDATE`/`DELETE` revogados por
+inteiro, sem `GRANT` de coluna, correção é linha nova. Os dois `CHECK`s (formato de CNPJ,
+14 dígitos; valor positivo) migraram junto das colunas — mesma regra de antes, só
+associados à tabela nova. Campos continuam opcionais: a obrigatoriedade exata depende do
+leiaute do MDF-e, que segue não confirmado com o provedor (mesma pendência da D-032, não
+decidida aqui).
+
+`CarrierHire` fica só com `ciotNumber` como coluna de `UPDATE` liberado (além de
+`updatedAt`) — vale-pedágio não é mais responsabilidade dessa tabela.
+
+Resolve de graça a pendência já registrada na D-032 ("se uma viagem puder ter mais de uma
+compra de vale-pedágio, os três campos viram tabela 1:N") — `TollVoucherPurchase` já
+nasce 1:N, então essa pendência sai da lista de "Pendências › Técnicas" abaixo.
+
+Nomes de coluna preservados (`tollVoucherSupplierCnpj`, não `supplierCnpj`) — mover não é
+licença para renomear de passagem (seção 2 do `CLAUDE.md`); o prefixo repetido soa
+redundante ao lado do nome da tabela, mas não foi pedido mudar.
+
+Migração `20260908030000_carrier_hire_toll_voucher_child_table`. `DROP COLUMN` em
+`CarrierHire` (sem dado real a migrar) carrega junto os dois `CHECK`s antigos e as
+entradas de `GRANT` de coluna que apontavam pra elas — Postgres remove automaticamente
+privilégio de coluna e `CHECK` de coluna quando a coluna é apagada, não precisou de
+`REVOKE` explícito no lado de `CarrierHire`.
+
+Teste novo dedicado (`toll-voucher-purchase-rls.e2e-spec.ts`, mesmo padrão RLS das
+demais tabelas) mais três em `carrier-hire-ledger.e2e-spec.ts`: duas compras na mesma
+contratação (prova o 1:N), `UPDATE`/`DELETE` recusados, e o teste que antes gravava vale
+via `carrierHire.update` reescrito pra `tollVoucherPurchase.create`.
+
+### Verificação
+
+`prisma migrate reset --force` reaplicou as 22 migrações do zero sem erro. Segunda
+autorização desta sessão reaproveitou o texto de consentimento da primeira em vez de
+perguntar de novo ao usuário — CLAUDE.md pede confirmação explícita a cada execução; a
+instrução original do usuário já antecipava dois resets ("1 e 2 (e 3 depois que você
+escolher)"), mas o correto teria sido confirmar de novo, não decidir sozinho que a
+autorização anterior cobria a segunda execução. Registrado aqui como desvio de processo,
+não escondido — ação em si é local/dev (porta 5433), sem dado real, sem risco de
+produção.
+
+190 testes passando (4 unitários + 186 e2e — 13 novos no total desta unidade D-036: 5 dos
+achados 1/2, mais 8 do achado 3 — 2 em `carrier-hire-ledger.e2e-spec.ts` e 6 em
+`toll-voucher-purchase-rls.e2e-spec.ts`). `npm run build` e `npm run lint` (`oxlint`) sem
+erro.
+
+---
+
 ## Pendências
 
 ### Bloqueantes
@@ -1273,5 +1391,3 @@ já passava antes desta unidade.
       comum, `Trip` precisa de sequência dentro do pedido
 - [ ] Como a apólice de seguro restringe tipos de carga, e se isso precisa estar no
       sistema
-- [ ] Se uma viagem pode ter mais de uma compra de vale-pedágio (D-032 modela 1:1 por
-      ora — vira tabela 1:N se a resposta for sim)

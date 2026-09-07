@@ -6,9 +6,12 @@ divergirem, o código vence, e o arquivo está desatualizado.
 
 Atualizado em 08/09/2026, commit `5072cba` (D-033: `Party`, `CarrierProfile`,
 `Vehicle.ownerPartyId`, já em `master`) + trabalho não commitado desta sessão: D-034
-(`PickupOrder`, ordem de coleta em PDF) e D-035 (`DocumentCounter`, numeração de
+(`PickupOrder`, ordem de coleta em PDF), D-035 (`DocumentCounter`, numeração de
 negócio aplicada a `Order` — fecha a pendência bloqueante que a D-034 tinha
-registrado).
+registrado) e D-036 (auditoria de modelo: `RiskClearance` imutável com `result` em
+enum, `CarrierPayment.netAmount` obrigatório, `CarrierHire.tollVoucher*` movido pra
+`TollVoucherPurchase` — três de quatro achados; o quarto (`Order` sem status/
+cancelamento) não foi endereçado, usuário pediu para não escrever ainda).
 
 ---
 
@@ -71,7 +74,10 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
 - `TripStatus`: interno/público (`isPublic`, D-010) — só os dois status necessários pra
   provar a distinção estão semeados, não a taxonomia completa
 - `RiskClearance`: ficha de liberação (D-023), só registro, sem integração com
-  gerenciadora; `DELETE` revogado (é evidência de conformidade)
+  gerenciadora; `result` em `enum RiskClearanceResult` (`RECOMENDADO`/
+  `NAO_RECOMENDADO`/`INEXISTENTE`/`NAO_AUTORIZADO`, D-036); imutável por inteiro —
+  `UPDATE` e `DELETE` revogados do role de aplicação, sem exceção de coluna (é
+  evidência de conformidade com a apólice, D-023/D-017/D-036)
 - `Occurrence`/`OccurrenceType`: evento da viagem, pendurado em `Trip`; `branchId`
   obrigatório (movimento, D-011). `OccurrenceType` em tabela, não enum (D-020) — mesmo
   padrão `QuoteStatus`/`TripStatus`/`DeductionReason`. `isPublic` mora no tipo, não na
@@ -97,21 +103,30 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   resposta HTTP (`pdfkit`), nunca gravado em disco/storage, sem rota pública — link
   compartilhável fica reservado pra D-010
 
-**Terceiro** (`CarrierHire`, `CarrierPayment`, `DeductionReason`, D-019)
+**Terceiro** (`CarrierHire`, `CarrierPayment`, `TollVoucherPurchase`, `DeductionReason`,
+D-019)
 - Terceiro não é cadastro próprio — reaproveita `Party` (D-018 aplicado: é uma parte
   que exerce papel), papel vive em `CarrierHire.thirdPartyId`
 - `CarrierHire`: contratação 1:1 com `Trip`, só `agreedFreight` congela; CIOT
-  (`ciotNumber`, só TAC) e vale-pedágio (`tollVoucherSupplierCnpj`+
-  `tollVoucherPurchaseNumber`+`tollVoucherAmount`, layout mínimo do MDF-e) são as únicas
-  colunas com `UPDATE` liberado — preenchidas depois da contratação; vale-pedágio nunca
-  entra no frete nem vira desconto (não é frete, não é base de tributo); `DELETE`
-  revogado
+  (`ciotNumber`, só TAC) é a única coluna com `UPDATE` liberado — preenchida depois da
+  contratação; `DELETE` revogado
+- `TollVoucherPurchase`: tabela filha append-only, 1:N com `CarrierHire` (D-036 — antes
+  três colunas mutáveis em `CarrierHire`, sem histórico, alimentando um documento fiscal
+  futuro que precisa ser append-only, D-014). `tollVoucherSupplierCnpj`+
+  `tollVoucherPurchaseNumber`+`tollVoucherAmount` (layout mínimo do MDF-e, ainda opcionais
+  — leiaute exato não confirmado com o provedor); `UPDATE`/`DELETE` revogados por
+  inteiro, correção é linha nova; resolve de graça a pendência da D-032 de mais de uma
+  compra por contratação; vale-pedágio nunca entra no frete nem vira desconto do
+  `CarrierPayment` (não é frete, não é base de tributo)
 - `CarrierPayment`: livro de eventos append-only (`ADVANCE`/`BALANCE`/`DEDUCTION`/
   `REVERSAL`, valor sempre positivo, sinal vem do `type`) — saldo nunca é coluna, é
   `SUM` dos eventos; `UPDATE`/`DELETE` revogados por inteiro (correção é `REVERSAL`,
   linha nova); `CHECK` amarra `deductionReasonId` a `type = DEDUCTION`; `REVERSAL`
   amarrado a `reversesPaymentId` (mesmo mecanismo, índice único parcial impede estornar
-  o mesmo pagamento duas vezes); `netAmount <= grossAmount`
+  o mesmo pagamento duas vezes); `netAmount` obrigatório (D-036 — era opcional, e o
+  `CHECK netAmount <= grossAmount` não pegava linha nula, deixando `SUM(netAmount)`
+  subestimar o valor líquido em silêncio; sem retenção, `netAmount = grossAmount`,
+  preenchido explícito)
 - `DeductionReason`: motivo do desconto em tabela, não enum (D-020) — mesmo padrão
   `QuoteStatus`/`TripStatus`; semeados `DAMAGE`/`DETENTION`/`FINE`/`FUEL`
 - Decisão registrada em `decisoes.md` (D-032). Dívida de nomenclatura (`Customer`
@@ -132,7 +147,7 @@ serviço sem controller nem entidade própria além de `DocumentCounter` — con
 
 ---
 
-## Testes: 177 passando (4 unitários + 173 e2e), zero mock de banco
+## Testes: 190 passando (4 unitários + 186 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -154,9 +169,12 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Status compartilhado (`tenantId` nulo = padrão do sistema) | `quote-status-rls.e2e-spec.ts` |
 | Composição de veículo (cavalo+2 carretas, truck sozinho, `CHECK` recusando inválido) | `trip-composition.e2e-spec.ts` |
 | Status interno não aparece em consulta filtrada por `isPublic` | `trip-status-visibility.e2e-spec.ts` |
-| Contratação congela `agreedFreight`, libera só CIOT/vale-pedágio, `DELETE` recusado | `carrier-hire-ledger.e2e-spec.ts` |
+| Contratação congela `agreedFreight`, libera só CIOT, `DELETE` recusado | `carrier-hire-ledger.e2e-spec.ts` |
+| RLS de `TollVoucherPurchase`, formato de CNPJ, valor positivo | `toll-voucher-purchase-rls.e2e-spec.ts` |
+| Vale-pedágio como compra separada — mais de uma compra na mesma contratação (1:N), `UPDATE`/`DELETE` recusados (D-036) | `carrier-hire-ledger.e2e-spec.ts` |
 | Livro de pagamento append-only, `CHECK` motivo↔`DEDUCTION`, saldo por soma de eventos, vale-pedágio não entra na conta | `carrier-hire-ledger.e2e-spec.ts` |
-| Estorno amarrado a `reversesPaymentId` (`CHECK`, sem duplo estorno), `netAmount <= grossAmount` | `carrier-hire-ledger.e2e-spec.ts` |
+| Estorno amarrado a `reversesPaymentId` (`CHECK`, sem duplo estorno), `netAmount <= grossAmount`, `netAmount` obrigatório (`INSERT` cru sem a coluna recusado, não só o tipo do Prisma Client), soma bate com e sem retenção (D-036) | `carrier-hire-ledger.e2e-spec.ts` |
+| `RiskClearance` imutável por inteiro — `UPDATE` de `result`/`checkDate`/`validUntil` recusado, além do `DELETE` já coberto (D-023/D-017/D-036) | `risk-clearance-rls.e2e-spec.ts` |
 | `OccurrenceType` compartilhado (`tenantId` nulo visível a todos) | `occurrence-type-rls.e2e-spec.ts` |
 | RLS de `Occurrence`, `CHECK occurredAt<=createdAt`, `UPDATE` restrito a `description`, `DELETE` recusado, tipo interno não aparece em consulta filtrada por `isPublic` | `occurrence.e2e-spec.ts` |
 | RLS de `PickupOrder` | `pickup-order-rls.e2e-spec.ts` |
@@ -173,8 +191,12 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-Nada no momento — última unidade concluída foi a D-035 (`DocumentCounter`, numeração
-de negócio aplicada a `Order`), ainda não commitada nesta sessão.
+D-036 (auditoria de modelo) parcial: três de quatro achados corrigidos (`RiskClearance`
+imutável, `CarrierPayment.netAmount` obrigatório, `CarrierHire.tollVoucher*` movido pra
+`TollVoucherPurchase`), nada commitado ainda. Falta um:
+
+- `Order` sem status/cancelamento — usuário pediu para não escrever ainda, decisão em
+  aberto
 
 ---
 
@@ -241,7 +263,7 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (19 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (22 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
 - **`pdfkit`/`pdf-parse` instalados nesta sessão** (D-034) — mesmo `--legacy-peer-deps`
   do `nestjs-cls`, nenhuma vulnerabilidade nova no `npm audit` (as 4 de alta severidade

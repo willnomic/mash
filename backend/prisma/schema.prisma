@@ -10,38 +10,39 @@ datasource db {
 // id é o tenant. A política de RLS compara "id" com o tenant da sessão, para
 // que uma requisição só enxergue a própria linha desta tabela.
 model Tenant {
-  id        String   @id @db.Uuid
-  name      String
+  id                   String                @id @db.Uuid
+  name                 String
   // Identifica o tenant no login, antes de existir tenant na sessão
   // (D-029) — não é a chave primária (D-015: UUID nunca aparece pro
   // operador). Formato (minúsculo, sem espaço) é reforçado por CHECK no
   // banco, não só validado na aplicação.
-  slug      String   @unique @db.VarChar(63)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  users     User[]
-  branches  Branch[]
-  parties   Party[]
-  addresses Address[]
-  drivers   Driver[]
-  vehicles  Vehicle[]
-  lanes     Lane[]
-  freightRates FreightRate[]
-  quoteStatuses QuoteStatus[]
-  quotes    Quote[]
-  orders    Order[]
-  documentCounters DocumentCounter[]
-  tripStatuses  TripStatus[]
-  trips         Trip[]
-  riskClearances RiskClearance[]
-  deductionReasons DeductionReason[]
-  carrierHires     CarrierHire[]
-  carrierPayments  CarrierPayment[]
-  occurrenceTypes  OccurrenceType[]
-  occurrences      Occurrence[]
-  carrierProfiles  CarrierProfile[]
-  pickupOrders     PickupOrder[]
-  pickupOrderItems PickupOrderItem[]
+  slug                 String                @unique @db.VarChar(63)
+  createdAt            DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime              @updatedAt @db.Timestamptz(3)
+  users                User[]
+  branches             Branch[]
+  parties              Party[]
+  addresses            Address[]
+  drivers              Driver[]
+  vehicles             Vehicle[]
+  lanes                Lane[]
+  freightRates         FreightRate[]
+  quoteStatuses        QuoteStatus[]
+  quotes               Quote[]
+  orders               Order[]
+  documentCounters     DocumentCounter[]
+  tripStatuses         TripStatus[]
+  trips                Trip[]
+  riskClearances       RiskClearance[]
+  deductionReasons     DeductionReason[]
+  carrierHires         CarrierHire[]
+  carrierPayments      CarrierPayment[]
+  tollVoucherPurchases TollVoucherPurchase[]
+  occurrenceTypes      OccurrenceType[]
+  occurrences          Occurrence[]
+  carrierProfiles      CarrierProfile[]
+  pickupOrders         PickupOrder[]
+  pickupOrderItems     PickupOrderItem[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
@@ -49,17 +50,17 @@ model Tenant {
 // carrega. Existe agora só pra esses modelos já nascerem com branchId —
 // zero tela, zero filtro, zero permissão por filial no MVP.
 model Branch {
-  id        String   @id @db.Uuid
-  tenantId  String   @db.Uuid
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  name      String
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  orders    Order[]
-  trips     Trip[]
-  carrierHires CarrierHire[]
-  occurrences  Occurrence[]
-  pickupOrders PickupOrder[]
+  id               String            @id @db.Uuid
+  tenantId         String            @db.Uuid
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  name             String
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
+  orders           Order[]
+  trips            Trip[]
+  carrierHires     CarrierHire[]
+  occurrences      Occurrence[]
+  pickupOrders     PickupOrder[]
   documentCounters DocumentCounter[]
 
   @@index([tenantId])
@@ -111,44 +112,44 @@ enum PersonType {
 // dizendo "Clientes" e "Transportadores" (D-008) — o nome do model é
 // vocabulário de código, não de tela.
 model Party {
-  id         String     @id @db.Uuid
-  tenantId   String     @db.Uuid
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  personType PersonType
-  name       String
+  id                       String          @id @db.Uuid
+  tenantId                 String          @db.Uuid
+  tenant                   Tenant          @relation(fields: [tenantId], references: [id])
+  personType               PersonType
+  name                     String
   // Exatamente um dos dois preenchido, reforçado por CHECK no banco — não
   // confiar só na aplicação lembrar (mesmo critério de D-012/D-014/D-029).
   // Dígito verificador NÃO é validado aqui: é lógica não trivial, e regra
   // fiscal não se responde de memória (seção 1.6) — só formato (contagem
   // de dígitos) é garantido no banco. Unicidade por documento dentro do
   // tenant vem dos dois @@unique abaixo.
-  cpf        String?    @db.VarChar(11)
-  cnpj       String?    @db.VarChar(14)
+  cpf                      String?         @db.VarChar(11)
+  cnpj                     String?         @db.VarChar(14)
   // Inscrição estadual: texto livre, sem formato validado — varia por UF e
   // inclui "ISENTO". Não modelar regra de obrigatoriedade sem fonte.
-  ie         String?
+  ie                       String?
   // Cadastro nunca tem hard delete (D-017): inativar é estado, não remoção.
-  active     Boolean    @default(true)
-  createdAt  DateTime   @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
-  addresses  Address[]
-  freightRates FreightRate[]
+  active                   Boolean         @default(true)
+  createdAt                DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime        @updatedAt @db.Timestamptz(3)
+  addresses                Address[]
+  freightRates             FreightRate[]
   // Três relações nomeadas para o mesmo model — uma Party pode ser
   // sender numa Order e tomador em outra (D-018).
-  ordersAsSender    Order[] @relation("OrderSender")
-  ordersAsRecipient Order[] @relation("OrderRecipient")
-  ordersAsTomador   Order[] @relation("OrderTomador")
+  ordersAsSender           Order[]         @relation("OrderSender")
+  ordersAsRecipient        Order[]         @relation("OrderRecipient")
+  ordersAsTomador          Order[]         @relation("OrderTomador")
   // Terceiro é uma parte que exerce papel (D-018 aplicado a D-019), não
   // cadastro próprio — reaproveita Party (já cobre PF/CPF e PJ/CNPJ,
   // exatamente TAC/ETC), papel vive em CarrierHire, não aqui.
-  carrierHiresAsThirdParty CarrierHire[] @relation("CarrierHireThirdParty")
+  carrierHiresAsThirdParty CarrierHire[]   @relation("CarrierHireThirdParty")
   // Existência opcional (D-032): é o que torna a Party um transportador
   // contratável, não um campo a mais no cadastro do cliente.
-  carrierProfile CarrierProfile?
+  carrierProfile           CarrierProfile?
   // Veículos de que esta Party é proprietária (D-023) — ownerPartyId nulo
   // no Vehicle significa frota própria, então essa lista só existe para
   // Party que é proprietária de terceiro.
-  ownedVehicles  Vehicle[] @relation("VehicleOwner")
+  ownedVehicles            Vehicle[]       @relation("VehicleOwner")
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnpj])
@@ -162,20 +163,20 @@ model Party {
 // Carrega tenantId e RLS próprios: não basta herdar do Party via join,
 // senão uma consulta crua nesta tabela vazaria entre tenants (D-012).
 model Address {
-  id          String   @id @db.Uuid
-  tenantId    String   @db.Uuid
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  partyId     String   @db.Uuid
-  party       Party    @relation(fields: [partyId], references: [id])
-  logradouro  String
-  numero      String?
-  complemento String?
-  bairro      String
-  municipio   String
-  uf          String   @db.Char(2)
-  cep         String   @db.VarChar(8)
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+  id                 String        @id @db.Uuid
+  tenantId           String        @db.Uuid
+  tenant             Tenant        @relation(fields: [tenantId], references: [id])
+  partyId            String        @db.Uuid
+  party              Party         @relation(fields: [partyId], references: [id])
+  logradouro         String
+  numero             String?
+  complemento        String?
+  bairro             String
+  municipio          String
+  uf                 String        @db.Char(2)
+  cep                String        @db.VarChar(8)
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
   tripsAsDestination Trip[]
   pickupOrders       PickupOrder[]
 
@@ -195,25 +196,25 @@ enum EmploymentType {
 // login, sem relação com User. Sem branchId: cadastro é da empresa
 // (D-011).
 model Driver {
-  id             String         @id @db.Uuid
-  tenantId       String         @db.Uuid
-  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  id             String          @id @db.Uuid
+  tenantId       String          @db.Uuid
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
   name           String
   // Formato básico (contagem de dígitos) no banco, igual Party — não o
   // dígito verificador (seção 1.6).
-  cpf            String         @db.VarChar(11)
+  cpf            String          @db.VarChar(11)
   // Número e categoria da CNH ficam texto livre, sem CHECK de formato:
   // diferente de CPF/CEP, não tenho como confirmar a regra de memória com
   // segurança (seção 1.6) — validação fica para quando houver fonte.
   cnhNumber      String
   cnhCategory    String
   // Data de calendário, não timestamp (D-016) — vencimento não tem hora.
-  cnhValidUntil  DateTime       @db.Date
+  cnhValidUntil  DateTime        @db.Date
   employmentType EmploymentType
   // Cadastro nunca tem hard delete (D-017): inativar é estado, não remoção.
-  active         Boolean        @default(true)
-  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
   trips          Trip[]
   riskClearances RiskClearance[]
 
@@ -249,29 +250,29 @@ enum VehicleType {
 // (ownership='OWNED' com ownerPartyId preenchido, por exemplo) — fonte
 // única de verdade (CLAUDE.md 3.2), a propriedade é derivada só da FK.
 model Vehicle {
-  id           String      @id @db.Uuid
-  tenantId     String      @db.Uuid
-  tenant       Tenant      @relation(fields: [tenantId], references: [id])
-  plate        String
+  id              String          @id @db.Uuid
+  tenantId        String          @db.Uuid
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  plate           String
   // Texto livre, sem CHECK: RENAVAM já teve tamanho histórico diferente do
   // atual, e placa tem dois formatos válidos (antigo e Mercosul) — não é
   // regra estável o bastante pra afirmar de memória (seção 1.6).
-  renavam      String
-  type         VehicleType
-  ownerPartyId String?     @db.Uuid
-  ownerParty   Party?      @relation("VehicleOwner", fields: [ownerPartyId], references: [id])
+  renavam         String
+  type            VehicleType
+  ownerPartyId    String?         @db.Uuid
+  ownerParty      Party?          @relation("VehicleOwner", fields: [ownerPartyId], references: [id])
   // Decimal, não number — mesmo cuidado do D-013 para valor que alimenta
   // cálculo de frete depois (R$/ton).
-  capacityKg Decimal          @db.Decimal(10, 3)
-  tareKg     Decimal          @db.Decimal(10, 3)
-  active     Boolean          @default(true)
-  createdAt  DateTime         @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime         @updatedAt @db.Timestamptz(3)
+  capacityKg      Decimal         @db.Decimal(10, 3)
+  tareKg          Decimal         @db.Decimal(10, 3)
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @db.Timestamptz(3)
   // Três relações nomeadas: o mesmo Vehicle pode ser o veículo principal
   // numa Trip e carreta em outra — a composição é da viagem (D-018).
-  tripsAsVehicle  Trip[] @relation("TripVehicle")
-  tripsAsTrailer1 Trip[] @relation("TripTrailer1")
-  tripsAsTrailer2 Trip[] @relation("TripTrailer2")
+  tripsAsVehicle  Trip[]          @relation("TripVehicle")
+  tripsAsTrailer1 Trip[]          @relation("TripTrailer1")
+  tripsAsTrailer2 Trip[]          @relation("TripTrailer2")
   riskClearances  RiskClearance[]
 
   @@unique([tenantId, plate])
@@ -287,16 +288,16 @@ model Vehicle {
 // bater com o schema de NF-e/CT-e. Sem branchId: cadastro é da empresa
 // (D-011).
 model Lane {
-  id                   String        @id @db.Uuid
-  tenantId             String        @db.Uuid
-  tenant               Tenant        @relation(fields: [tenantId], references: [id])
-  originCity           String
-  originState          String        @db.Char(2)
-  destinationCity      String
-  destinationState     String        @db.Char(2)
-  createdAt            DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime      @updatedAt @db.Timestamptz(3)
-  freightRates         FreightRate[]
+  id               String        @id @db.Uuid
+  tenantId         String        @db.Uuid
+  tenant           Tenant        @relation(fields: [tenantId], references: [id])
+  originCity       String
+  originState      String        @db.Char(2)
+  destinationCity  String
+  destinationState String        @db.Char(2)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
+  freightRates     FreightRate[]
 
   @@unique([tenantId, originCity, originState, destinationCity, destinationState])
   @@index([tenantId])
@@ -315,25 +316,25 @@ model Lane {
 // por EXCLUDE USING gist na migração (btree_gist) — não por validação na
 // aplicação.
 model FreightRate {
-  id         String   @id @db.Uuid
-  tenantId   String   @db.Uuid
-  tenant     Tenant   @relation(fields: [tenantId], references: [id])
-  partyId    String   @db.Uuid
-  party      Party    @relation(fields: [partyId], references: [id])
-  laneId     String   @db.Uuid
-  lane       Lane     @relation(fields: [laneId], references: [id])
+  id                   String   @id @db.Uuid
+  tenantId             String   @db.Uuid
+  tenant               Tenant   @relation(fields: [tenantId], references: [id])
+  partyId              String   @db.Uuid
+  party                Party    @relation(fields: [partyId], references: [id])
+  laneId               String   @db.Uuid
+  lane                 Lane     @relation(fields: [laneId], references: [id])
   // Data de calendário, não timestamp (D-016) — vigência não tem hora.
-  validFrom  DateTime @db.Date
-  validTo    DateTime @db.Date
+  validFrom            DateTime @db.Date
+  validTo              DateTime @db.Date
   // Escalas de D-013. Decimal sempre — nunca number: a+b concatena string
   // em vez de somar (testado abaixo).
-  rate                 Decimal @db.Decimal(18, 6)
-  minimumFreight       Decimal @db.Decimal(14, 2)
-  additionalPercentage Decimal @db.Decimal(7, 4)
-  createdAt  DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
-  quotes     Quote[]
-  orders     Order[]
+  rate                 Decimal  @db.Decimal(18, 6)
+  minimumFreight       Decimal  @db.Decimal(14, 2)
+  additionalPercentage Decimal  @db.Decimal(7, 4)
+  createdAt            DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @db.Timestamptz(3)
+  quotes               Quote[]
+  orders               Order[]
 
   @@index([tenantId, partyId, laneId])
 }
@@ -370,26 +371,26 @@ model QuoteStatus {
 // mecanismo do FreightRate) e DELETE revogado (D-017: é histórico —
 // "perdida" é estado, não remoção).
 model Quote {
-  id            String      @id @db.Uuid
-  tenantId      String      @db.Uuid
-  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+  id                   String      @id @db.Uuid
+  tenantId             String      @db.Uuid
+  tenant               Tenant      @relation(fields: [tenantId], references: [id])
   // Referência de auditoria à linha de origem (D-014) — não redundante
   // com party/lane: ambos são derived via freightRate.
-  freightRateId String      @db.Uuid
-  freightRate   FreightRate @relation(fields: [freightRateId], references: [id])
-  statusId      String      @db.Uuid
-  status        QuoteStatus @relation(fields: [statusId], references: [id])
+  freightRateId        String      @db.Uuid
+  freightRate          FreightRate @relation(fields: [freightRateId], references: [id])
+  statusId             String      @db.Uuid
+  status               QuoteStatus @relation(fields: [statusId], references: [id])
   // Congelado no fechamento — cópia, não consulta. Escalas de D-013.
-  rate                 Decimal  @db.Decimal(18, 6)
-  minimumFreight       Decimal  @db.Decimal(14, 2)
-  additionalPercentage Decimal  @db.Decimal(7, 4)
+  rate                 Decimal     @db.Decimal(18, 6)
+  minimumFreight       Decimal     @db.Decimal(14, 2)
+  additionalPercentage Decimal     @db.Decimal(7, 4)
   // Cálculo real de frete (peso x tarifa, piso mínimo) não existe ainda —
   // entra quando Order/Quote ganharem itens de carga. Por ora, quem
   // calcula e informa é o chamador do serviço.
-  total                Decimal  @db.Decimal(14, 2)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  orders    Order[]
+  total                Decimal     @db.Decimal(14, 2)
+  createdAt            DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime    @updatedAt @db.Timestamptz(3)
+  orders               Order[]
 
   @@index([tenantId, statusId])
 }
@@ -425,36 +426,36 @@ model Quote {
 // de colunas mutáveis. DELETE também revogado (D-017: movimento
 // financeiro nunca se apaga).
 model Order {
-  id             String       @id @db.Uuid
-  tenantId       String       @db.Uuid
-  tenant         Tenant       @relation(fields: [tenantId], references: [id])
-  branchId       String       @db.Uuid
-  branch         Branch       @relation(fields: [branchId], references: [id])
+  id                   String      @id @db.Uuid
+  tenantId             String      @db.Uuid
+  tenant               Tenant      @relation(fields: [tenantId], references: [id])
+  branchId             String      @db.Uuid
+  branch               Branch      @relation(fields: [branchId], references: [id])
   // Número de negócio (D-015) — nunca a PK, nunca aparece como UUID pro
   // operador. Atribuído por DocumentCounter (mesmo mecanismo que vai
   // servir CT-e/fatura), dentro da MESMA transação do INSERT desta linha
   // — só assim um rollback desfaz as duas coisas juntas (por isso nunca
   // SEQUENCE, cujo nextval() nunca é desfeito). Único dentro de
   // tenant+branch, garantido no banco.
-  number         Int
-  quoteId        String?      @db.Uuid
-  quote          Quote?       @relation(fields: [quoteId], references: [id])
-  freightRateId  String       @db.Uuid
-  freightRate    FreightRate  @relation(fields: [freightRateId], references: [id])
-  senderId       String       @db.Uuid
-  sender         Party        @relation("OrderSender", fields: [senderId], references: [id])
-  recipientId    String       @db.Uuid
-  recipient      Party        @relation("OrderRecipient", fields: [recipientId], references: [id])
-  tomadorId      String       @db.Uuid
-  tomador        Party        @relation("OrderTomador", fields: [tomadorId], references: [id])
+  number               Int
+  quoteId              String?     @db.Uuid
+  quote                Quote?      @relation(fields: [quoteId], references: [id])
+  freightRateId        String      @db.Uuid
+  freightRate          FreightRate @relation(fields: [freightRateId], references: [id])
+  senderId             String      @db.Uuid
+  sender               Party       @relation("OrderSender", fields: [senderId], references: [id])
+  recipientId          String      @db.Uuid
+  recipient            Party       @relation("OrderRecipient", fields: [recipientId], references: [id])
+  tomadorId            String      @db.Uuid
+  tomador              Party       @relation("OrderTomador", fields: [tomadorId], references: [id])
   // Congelado na criação — cópia, não consulta. Escalas de D-013.
-  rate                 Decimal  @db.Decimal(18, 6)
-  minimumFreight       Decimal  @db.Decimal(14, 2)
-  additionalPercentage Decimal  @db.Decimal(7, 4)
-  total                Decimal  @db.Decimal(14, 2)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  trips     Trip[]
+  rate                 Decimal     @db.Decimal(18, 6)
+  minimumFreight       Decimal     @db.Decimal(14, 2)
+  additionalPercentage Decimal     @db.Decimal(7, 4)
+  total                Decimal     @db.Decimal(14, 2)
+  createdAt            DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime    @updatedAt @db.Timestamptz(3)
+  trips                Trip[]
 
   @@unique([tenantId, branchId, number])
   @@index([tenantId, branchId])
@@ -479,35 +480,65 @@ model TripStatus {
   @@unique([tenantId, code])
 }
 
+// Resultado normalizado da liberação de risco (D-023, auditoria de modelo
+// 08/09/2026) — os quatro resultados que a D-023 cita nominalmente:
+// "recomendado" (implícito, é o oposto de "não recomendado" — confirmado
+// como vocabulário do setor pelo dado de teste já existente antes desta
+// mudança) e os três que impedem embarque. Fixo pelo sistema, não varia
+// por tenant (D-020, mesma exceção de AnttCategory/CarrierBondType) — é o
+// resultado NORMALIZADO que o operador registra depois de consultar
+// qualquer gerenciadora (Buonny, Opentech, Global5, Nox...), não o texto
+// cru de cada provedor; por isso enum é seguro apesar do vocabulário de
+// provedor variar (a normalização é regra de quem registra, não do
+// banco). Valores em português: vocabulário do próprio setor de gestão de
+// risco, sem tradução natural em uso (mesmo critério de VehicleType).
+enum RiskClearanceResult {
+  RECOMENDADO
+  NAO_RECOMENDADO
+  INEXISTENTE
+  NAO_AUTORIZADO
+}
+
 // Ficha de liberação de risco (D-023) — só registro do resultado já
 // obtido na gerenciadora (Buonny, Opentech, Global5, Nox...), sem
-// integração. number/result em texto livre: formato e vocabulário variam
-// por gerenciadora, não é regra estável o bastante pra fixar em enum
-// (seção 1.6). "Proprietário" é texto livre também — não existe cadastro
-// de dono de veículo no modelo hoje, e criar um não foi pedido.
+// integração. number em texto livre: numeração própria de cada
+// gerenciadora, não é regra estável o bastante pra fixar formato (seção
+// 1.6). "Proprietário" é texto livre também — não existe cadastro de dono
+// de veículo no modelo hoje, e criar um não foi pedido.
 // Sem branchId: é dado sobre o par motorista+veículo, não da operação de
 // uma filial (D-011, mesmo critério de Driver/Vehicle).
 //
-// DELETE revogado do role de aplicação: é evidência de conformidade —
-// "o não cumprimento faz perder o direito à indenização" (D-023). Um
-// registro apagado depois de um sinistro é pior que não ter registro
-// nenhum. Mesmo critério do histórico financeiro em D-017.
+// Imutável por inteiro (correção 08/09/2026, auditoria de modelo): é
+// evidência de conformidade com a apólice — "o não cumprimento faz perder
+// o direito à indenização" (D-023) — e essa garantia vale tanto para
+// DELETE quanto para UPDATE. A migração original só revogava DELETE
+// ("um registro apagado depois de um sinistro é pior que não ter
+// registro nenhum") e deixava UPDATE aberto por engano: o comentário que
+// justificava isso (`add_trip/migration.sql`) falava de Trip mudar
+// legitimamente ao longo da viagem, não de RiskClearance — uma ficha
+// "não recomendado" podia virar "liberado" depois do fato, sem rastro
+// nenhum, o mesmo risco que já tinha justificado revogar DELETE. Nenhuma
+// coluna aqui legitimamente muda depois de criada: a ficha nasce completa
+// (número, motorista, veículo, proprietário, data, validade, resultado —
+// D-023), não em rascunho. UPDATE revogado por inteiro do role de
+// aplicação, sem exceção de coluna — mesmo critério de CarrierPayment/
+// PickupOrder (D-017).
 model RiskClearance {
-  id         String   @id @db.Uuid
-  tenantId   String   @db.Uuid
-  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  id         String              @id @db.Uuid
+  tenantId   String              @db.Uuid
+  tenant     Tenant              @relation(fields: [tenantId], references: [id])
   number     String
-  driverId   String   @db.Uuid
-  driver     Driver   @relation(fields: [driverId], references: [id])
-  vehicleId  String   @db.Uuid
-  vehicle    Vehicle  @relation(fields: [vehicleId], references: [id])
+  driverId   String              @db.Uuid
+  driver     Driver              @relation(fields: [driverId], references: [id])
+  vehicleId  String              @db.Uuid
+  vehicle    Vehicle             @relation(fields: [vehicleId], references: [id])
   ownerName  String
   // Datas de calendário, não timestamp (D-016).
-  checkDate  DateTime @db.Date
-  validUntil DateTime @db.Date
-  result     String
-  createdAt  DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+  checkDate  DateTime            @db.Date
+  validUntil DateTime            @db.Date
+  result     RiskClearanceResult
+  createdAt  DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime            @updatedAt @db.Timestamptz(3)
   trips      Trip[]
 
   @@index([tenantId, driverId, vehicleId])
@@ -538,40 +569,40 @@ model RiskClearance {
 // movimento nunca se apaga — "cancelada" é estado (status), não remoção
 // (D-017, mesmo critério de Quote/Order/FreightRate).
 model Trip {
-  id                 String         @id @db.Uuid
-  tenantId           String         @db.Uuid
-  tenant             Tenant         @relation(fields: [tenantId], references: [id])
-  branchId           String         @db.Uuid
-  branch             Branch         @relation(fields: [branchId], references: [id])
-  orderId            String         @db.Uuid
-  order              Order          @relation(fields: [orderId], references: [id])
-  destinationAddressId String       @db.Uuid
-  destinationAddress Address        @relation(fields: [destinationAddressId], references: [id])
-  driverId           String         @db.Uuid
-  driver             Driver         @relation(fields: [driverId], references: [id])
-  vehicleId          String         @db.Uuid
-  vehicle            Vehicle        @relation("TripVehicle", fields: [vehicleId], references: [id])
-  trailer1Id         String?        @db.Uuid
-  trailer1           Vehicle?       @relation("TripTrailer1", fields: [trailer1Id], references: [id])
-  trailer2Id         String?        @db.Uuid
-  trailer2           Vehicle?       @relation("TripTrailer2", fields: [trailer2Id], references: [id])
-  riskClearanceId    String?        @db.Uuid
-  riskClearance      RiskClearance? @relation(fields: [riskClearanceId], references: [id])
-  statusId           String         @db.Uuid
-  status             TripStatus     @relation(fields: [statusId], references: [id])
-  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+  id                   String         @id @db.Uuid
+  tenantId             String         @db.Uuid
+  tenant               Tenant         @relation(fields: [tenantId], references: [id])
+  branchId             String         @db.Uuid
+  branch               Branch         @relation(fields: [branchId], references: [id])
+  orderId              String         @db.Uuid
+  order                Order          @relation(fields: [orderId], references: [id])
+  destinationAddressId String         @db.Uuid
+  destinationAddress   Address        @relation(fields: [destinationAddressId], references: [id])
+  driverId             String         @db.Uuid
+  driver               Driver         @relation(fields: [driverId], references: [id])
+  vehicleId            String         @db.Uuid
+  vehicle              Vehicle        @relation("TripVehicle", fields: [vehicleId], references: [id])
+  trailer1Id           String?        @db.Uuid
+  trailer1             Vehicle?       @relation("TripTrailer1", fields: [trailer1Id], references: [id])
+  trailer2Id           String?        @db.Uuid
+  trailer2             Vehicle?       @relation("TripTrailer2", fields: [trailer2Id], references: [id])
+  riskClearanceId      String?        @db.Uuid
+  riskClearance        RiskClearance? @relation(fields: [riskClearanceId], references: [id])
+  statusId             String         @db.Uuid
+  status               TripStatus     @relation(fields: [statusId], references: [id])
+  createdAt            DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @db.Timestamptz(3)
   // Contratação de terceiro (D-019) — 1:1, só existe quando a viagem é
   // terceirizada. FK vive em CarrierHire (dependente carrega a
   // referência), não aqui — mesmo critério de Address -> Party.
-  carrierHire        CarrierHire?
+  carrierHire          CarrierHire?
   // Eventos da viagem (D-018) — FK vive em Occurrence, não aqui, mesmo
   // critério de CarrierHire.
-  occurrences        Occurrence[]
+  occurrences          Occurrence[]
   // Ordem de coleta (D-027) — FK vive em PickupOrder, não aqui, mesmo
   // critério de CarrierHire/Occurrence. 1:N: uma Trip pode ter mais de
   // uma emissão ao longo do tempo (correção é emitir de novo, não editar).
-  pickupOrders       PickupOrder[]
+  pickupOrders         PickupOrder[]
 
   @@index([tenantId, branchId])
   @@index([tenantId, orderId])
@@ -583,13 +614,13 @@ model Trip {
 // tabela, não enum (D-020) — varia por tenant. Mesmo padrão de
 // QuoteStatus/TripStatus: tenantId nulo = padrão do sistema.
 model DeductionReason {
-  id        String   @id @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  id        String           @id @db.Uuid
+  tenantId  String?          @db.Uuid
+  tenant    Tenant?          @relation(fields: [tenantId], references: [id])
   code      String
   name      String
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime         @updatedAt @db.Timestamptz(3)
   payments  CarrierPayment[]
 
   @@unique([tenantId, code])
@@ -614,23 +645,25 @@ enum PaymentEventType {
 // gravado) — cada parcela ou desconto como coluna única viraria UPDATE
 // em valor financeiro, proibido pelo histórico de D-017.
 //
-// CIOT e vale-pedágio são preenchidos depois da contratação (emitidos
-// fora do sistema, antes da viagem sair) — por isso são as únicas
-// colunas com UPDATE liberado (GRANT por coluna na migração), junto de
-// updatedAt. tripId/thirdPartyId/agreedFreight congelam, mesmo mecanismo
-// do Quote.
+// CIOT é preenchido depois da contratação (emitido fora do sistema, antes
+// da viagem sair) — por isso é a única coluna com UPDATE liberado (GRANT
+// por coluna na migração), junto de updatedAt. tripId/thirdPartyId/
+// agreedFreight congelam, mesmo mecanismo do Quote. Vale-pedágio saiu
+// daqui na D-036 (auditoria de modelo, 08/09/2026) — virou tabela filha
+// append-only, TollVoucherPurchase, porque era editável sem histórico e
+// alimenta o MDF-e (D-014: documento fiscal é append-only).
 //
 // DELETE revogado: é histórico financeiro (D-017).
 model CarrierHire {
-  id           String   @id @db.Uuid
-  tenantId     String   @db.Uuid
-  tenant       Tenant   @relation(fields: [tenantId], references: [id])
-  branchId     String   @db.Uuid
-  branch       Branch   @relation(fields: [branchId], references: [id])
-  tripId       String   @unique @db.Uuid
-  trip         Trip     @relation(fields: [tripId], references: [id])
-  thirdPartyId String   @db.Uuid
-  thirdParty   Party    @relation("CarrierHireThirdParty", fields: [thirdPartyId], references: [id])
+  id           String @id @db.Uuid
+  tenantId     String @db.Uuid
+  tenant       Tenant @relation(fields: [tenantId], references: [id])
+  branchId     String @db.Uuid
+  branch       Branch @relation(fields: [branchId], references: [id])
+  tripId       String @unique @db.Uuid
+  trip         Trip   @relation(fields: [tripId], references: [id])
+  thirdPartyId String @db.Uuid
+  thirdParty   Party  @relation("CarrierHireThirdParty", fields: [thirdPartyId], references: [id])
 
   // Escala de valor final (D-013).
   agreedFreight Decimal @db.Decimal(14, 2)
@@ -641,20 +674,53 @@ model CarrierHire {
   // dinheiro.
   ciotNumber String?
 
-  // Vale-pedágio NUNCA compõe o frete nem vira CarrierPayment tipo
-  // DEDUCTION — não é frete, não é desconto; entrar contaminaria a base
-  // de tributo. Layout mínimo exigido pelo MDF-e (D-028): CNPJ da
-  // fornecedora, número da compra, valor. Confirmar leiaute exato com o
-  // provedor antes de fechar obrigatoriedade — por ora tudo opcional.
+  createdAt            DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime              @updatedAt @db.Timestamptz(3)
+  payments             CarrierPayment[]
+  tollVoucherPurchases TollVoucherPurchase[]
+
+  @@index([tenantId, branchId])
+}
+
+// Compra de vale-pedágio (D-019/D-028/D-032) — movida de CarrierHire para
+// tabela filha append-only na D-036 (auditoria de modelo, 08/09/2026):
+// como três colunas mutáveis em CarrierHire, o valor podia ser
+// sobrescrito sem histórico, e o MDF-e (D-028) vai referenciar esse
+// valor — documento fiscal é append-only (D-014), então o que alimenta um
+// não pode ser editável em silêncio. Mesmo critério de CarrierPayment
+// (D-017): correção é linha nova, nunca edição. Resolve de graça a
+// pendência da D-032 — "se uma viagem puder ter mais de uma compra de
+// vale-pedágio, os três campos viram tabela 1:N" — porque já nasce 1:N.
+//
+// Vale-pedágio nunca compõe o frete nem vira CarrierPayment tipo
+// DEDUCTION (D-032) — não é frete, não é base de tributo; por isso segue
+// fora do livro de CarrierPayment, só referenciando CarrierHire.
+//
+// Campos opcionais, mesmo critério de antes (seção 1.6): leiaute exato do
+// grupo de vale-pedágio do MDF-e ainda não confirmado com o provedor —
+// obrigatoriedade fica pendente dessa confirmação (D-032, pendência
+// técnica em decisoes.md), não decidida aqui.
+//
+// Sem branchId: é filho de CarrierHire, que já carrega (D-011, mesmo
+// critério de CarrierPayment não duplicar o que o pai já modela).
+//
+// UPDATE e DELETE revogados por inteiro do role de aplicação — nenhuma
+// coluna aqui legitimamente muda depois de criada, mesmo critério de
+// CarrierPayment/PickupOrder.
+model TollVoucherPurchase {
+  id            String      @id @db.Uuid
+  tenantId      String      @db.Uuid
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+  carrierHireId String      @db.Uuid
+  carrierHire   CarrierHire @relation(fields: [carrierHireId], references: [id])
+
   tollVoucherSupplierCnpj   String?  @db.VarChar(14)
   tollVoucherPurchaseNumber String?
   tollVoucherAmount         Decimal? @db.Decimal(14, 2)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  payments  CarrierPayment[]
 
-  @@index([tenantId, branchId])
+  @@index([tenantId, carrierHireId])
 }
 
 // Evento de pagamento ao terceiro — livro append-only (D-017: nenhuma
@@ -668,6 +734,15 @@ model CarrierHire {
 // transferido — pagamento a TAC pessoa física tem retenção, por isso
 // separado do valor bruto que compõe o saldo; nunca maior que o bruto
 // (CHECK na migração — retenção não é negativa).
+//
+// netAmount é NOT NULL (correção 08/09/2026, auditoria de modelo): era
+// opcional, e o CHECK "netAmount <= grossAmount" não pega NULL (Postgres
+// aprova CHECK sempre que a comparação avalia NULL) — então nada no banco
+// distinguia "sem retenção" de "não informado". Um SUM(netAmount) sobre
+// o livro excluiria em silêncio toda linha sem o campo preenchido,
+// subestimando o valor líquido pago sem erro nenhum. Sem retenção,
+// netAmount = grossAmount, preenchido explicitamente pelo chamador —
+// nunca inferido pelo banco (não há trigger, D-030).
 //
 // Sem branchId: é filho de CarrierHire, que já carrega — mesmo critério
 // do Address não duplicar o que o Party já modela.
@@ -683,8 +758,8 @@ model CarrierPayment {
   carrierHire   CarrierHire      @relation(fields: [carrierHireId], references: [id])
   type          PaymentEventType
 
-  grossAmount Decimal  @db.Decimal(14, 2)
-  netAmount   Decimal? @db.Decimal(14, 2)
+  grossAmount Decimal @db.Decimal(14, 2)
+  netAmount   Decimal @db.Decimal(14, 2)
 
   deductionReasonId String?          @db.Uuid
   deductionReason   DeductionReason? @relation(fields: [deductionReasonId], references: [id])
@@ -702,7 +777,7 @@ model CarrierPayment {
 
   // Data de calendário, não timestamp (D-016) — data do pagamento não
   // tem hora própria relevante ao domínio.
-  paymentDate DateTime @db.Date
+  paymentDate   DateTime @db.Date
   // Texto livre: sem vocabulário estável o bastante pra fixar em enum
   // agora (seção 1.6) — diferente de PaymentEventType, que é lógica do
   // sistema, não convenção bancária.
@@ -868,31 +943,31 @@ model Occurrence {
 // de novo (nova linha), não editar — mesmo critério de Order/CarrierHire.
 // UPDATE e DELETE revogados do role de aplicação, sem exceção de coluna.
 model PickupOrder {
-  id        String   @id @db.Uuid
-  tenantId  String   @db.Uuid
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  branchId  String   @db.Uuid
-  branch    Branch   @relation(fields: [branchId], references: [id])
-  tripId    String   @db.Uuid
-  trip      Trip     @relation(fields: [tripId], references: [id])
-  addressId String   @db.Uuid
-  address   Address  @relation(fields: [addressId], references: [id])
+  id                String            @id @db.Uuid
+  tenantId          String            @db.Uuid
+  tenant            Tenant            @relation(fields: [tenantId], references: [id])
+  branchId          String            @db.Uuid
+  branch            Branch            @relation(fields: [branchId], references: [id])
+  tripId            String            @db.Uuid
+  trip              Trip              @relation(fields: [tripId], references: [id])
+  addressId         String            @db.Uuid
+  address           Address           @relation(fields: [addressId], references: [id])
   // Complemento livre ao endereço estruturado — "Doca 12", "Pátio de
   // containers" — informação que não é campo de Address (D-024/NF-e).
-  locationLabel String?
+  locationLabel     String?
   // Data de calendário, não timestamp (D-016) — data da coleta não tem
   // fuso próprio relevante ao domínio.
-  pickupDate    DateTime @db.Date
-  pickupWindow  String?
-  businessHours String?
-  totalWeightKg    Decimal @db.Decimal(10, 3)
-  totalVolumeCount Int
-  totalCubicMeters Decimal @db.Decimal(10, 3)
+  pickupDate        DateTime          @db.Date
+  pickupWindow      String?
+  businessHours     String?
+  totalWeightKg     Decimal           @db.Decimal(10, 3)
+  totalVolumeCount  Int
+  totalCubicMeters  Decimal           @db.Decimal(10, 3)
   laborNote         String?
   nfeReference      String?
   romaneioReference String?
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  items     PickupOrderItem[]
+  createdAt         DateTime          @default(now()) @db.Timestamptz(3)
+  items             PickupOrderItem[]
 
   @@index([tenantId, branchId])
   @@index([tenantId, tripId])

@@ -12,14 +12,14 @@ const admin = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
-describe('CarrierPayment · Row-Level Security (D-012)', () => {
+describe('TollVoucherPurchase · Row-Level Security (D-012)', () => {
   let seedA: Awaited<ReturnType<typeof seedCarrierHireScenario>>;
   let seedB: Awaited<ReturnType<typeof seedCarrierHireScenario>>;
   let hireA: { id: string };
   let hireB: { id: string };
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "TollVoucherPurchase", "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     seedA = await seedCarrierHireScenario(admin, 'A', 'transportadora-a');
     seedB = await seedCarrierHireScenario(admin, 'B', 'transportadora-b');
@@ -45,69 +45,94 @@ describe('CarrierPayment · Row-Level Security (D-012)', () => {
       },
     });
 
-    await admin.carrierPayment.create({
+    await admin.tollVoucherPurchase.create({
       data: {
         id: uuidv7(),
         tenantId: seedA.tenant.id,
         carrierHireId: hireA.id,
-        type: 'ADVANCE',
-        grossAmount: '1000',
-        netAmount: '1000',
-        paymentDate: new Date('2026-01-05'),
+        tollVoucherSupplierCnpj: '11444777000161',
+        tollVoucherPurchaseNumber: 'VP-001',
+        tollVoucherAmount: '450.30',
       },
     });
-    await admin.carrierPayment.create({
+    await admin.tollVoucherPurchase.create({
       data: {
         id: uuidv7(),
         tenantId: seedB.tenant.id,
         carrierHireId: hireB.id,
-        type: 'ADVANCE',
-        grossAmount: '2000',
-        netAmount: '2000',
-        paymentDate: new Date('2026-01-05'),
+        tollVoucherSupplierCnpj: '11444777000161',
+        tollVoucherPurchaseNumber: 'VP-002',
+        tollVoucherAmount: '120.00',
       },
     });
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "TollVoucherPurchase", "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
 
   it('não enxerga dado de outro tenant', async () => {
-    const payments = await forTenant(seedA.tenant.id).carrierPayment.findMany();
+    const purchases = await forTenant(seedA.tenant.id).tollVoucherPurchase.findMany();
 
-    expect(payments).toHaveLength(1);
-    expect(payments[0].tenantId).toBe(seedA.tenant.id);
+    expect(purchases).toHaveLength(1);
+    expect(purchases[0].tenantId).toBe(seedA.tenant.id);
   });
 
   it('sem tenant definido, não retorna nada', async () => {
-    const payments = await base.carrierPayment.findMany();
+    const purchases = await base.tollVoucherPurchase.findMany();
 
-    expect(payments).toHaveLength(0);
+    expect(purchases).toHaveLength(0);
   });
 
   it('protege também consulta crua', async () => {
     const rows = await forTenant(
       seedA.tenant.id,
-    ).$queryRaw`SELECT * FROM "CarrierPayment"`;
+    ).$queryRaw`SELECT * FROM "TollVoucherPurchase"`;
 
     expect(rows).toHaveLength(1);
   });
 
   it('impede gravar no tenant alheio', async () => {
     await expect(
-      forTenant(seedA.tenant.id).carrierPayment.create({
+      forTenant(seedA.tenant.id).tollVoucherPurchase.create({
         data: {
           id: uuidv7(),
           tenantId: seedB.tenant.id,
           carrierHireId: hireB.id,
-          type: 'ADVANCE',
-          grossAmount: '1',
-          netAmount: '1',
-          paymentDate: new Date('2026-01-05'),
+          tollVoucherSupplierCnpj: '11444777000161',
+          tollVoucherPurchaseNumber: 'forjado',
+          tollVoucherAmount: '1',
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('recusa CNPJ fora do formato (14 dígitos)', async () => {
+    await expect(
+      forTenant(seedA.tenant.id).tollVoucherPurchase.create({
+        data: {
+          id: uuidv7(),
+          tenantId: seedA.tenant.id,
+          carrierHireId: hireA.id,
+          tollVoucherSupplierCnpj: '123',
+          tollVoucherPurchaseNumber: 'VP-003',
+          tollVoucherAmount: '10',
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('recusa valor não positivo', async () => {
+    await expect(
+      forTenant(seedA.tenant.id).tollVoucherPurchase.create({
+        data: {
+          id: uuidv7(),
+          tenantId: seedA.tenant.id,
+          carrierHireId: hireA.id,
+          tollVoucherAmount: '0',
         },
       }),
     ).rejects.toThrow();
