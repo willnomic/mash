@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 08/09/2026 (D-036)
+Atualizado em 08/09/2026 (D-037)
 
 ---
 
@@ -1372,6 +1372,56 @@ erro.
 
 ---
 
+## D-037 · Transbordo: `Trip.sequence`, ordem da perna dentro do `Order`
+**Status:** Fechada
+
+Fecha a pendência registrada em "Pendências › A observar no operacional": frequência de
+transbordo (armazenagem intermediária) em lotação.
+
+**Respondido pelo sócio, com base nas duas transportadoras da consultoria:** ~15% das
+paradas são armazenagem, mais uma fatia de crossdocking — **cerca de 1 em 8 viagens tem
+transbordo real**. Pernoite e abastecimento são maioria das paradas, mas não são
+transbordo — são evento de viagem única, já coberto por `Occurrence` (D-018). 1 em 8 não
+é raridade a ignorar: `Order` → múltiplas `Trip` em sequência precisa de ordem explícita.
+
+`Trip` ganha `sequence` (`Int`, `NOT NULL`) — posição da perna dentro do `Order`.
+
+**Decisões tomadas junto com o sócio:**
+- **`(orderId, sequence)` único**, garantido no banco (`CREATE UNIQUE INDEX`, não
+  `CHECK` — precisa enxergar outras linhas da mesma tabela).
+- **Não precisa ser contíguo.** Perna cancelada pode deixar buraco em `sequence` sem
+  qualquer consequência — diferente da numeração de CT-e (D-015), onde buraco exige
+  inutilização junto à SEFAZ. Por isso `sequence` é um inteiro atribuído direto pela
+  aplicação, **sem** `DocumentCounter` (D-035): não há number de negócio aqui, é só
+  ordem interna, e não existe motivo fiscal para fechar o buraco.
+- **Encadeamento de endereço fica na aplicação, não no banco.** "Destino da perna N =
+  origem da perna N+1" não vira `CHECK` nem trigger: pode haver exceção operacional
+  (ex.: um transbordo que não segue o roteiro padrão), e travar isso no banco impediria
+  o operador de registrar a exceção real. Mesmo critério de D-030 (regra de negócio na
+  aplicação, não em trigger) e da seção 2 do `CLAUDE.md` (não travar o operador por um
+  caso que pode ser exceção).
+
+Migração `20260908040000_add_trip_sequence`: `ALTER TABLE "Trip" ADD COLUMN "sequence"
+INTEGER NOT NULL` direto, sem backfill (sem linha real na tabela ainda, mesmo critério de
+`Order.number`, D-035) + `CREATE UNIQUE INDEX "Trip_orderId_sequence_key"`. Sem
+alteração de `GRANT`/`REVOKE`: `Trip` já não tinha nenhuma coluna de `UPDATE` restrita
+(D-018 — "status, liberação de risco e composição de veículo mudam legitimamente ao
+longo da viagem"), e nada na decisão pede tornar `sequence` imutável.
+
+**Verificação:** `test/trip-sequence.e2e-spec.ts` (novo) — três pernas em sequência no
+mesmo `Order` aceitas; `sequence` duplicada dentro do mesmo pedido recusada pelo banco;
+buraco na sequência (1 e 3, sem o 2) aceito sem erro. Seis chamadas de criação de `Trip`
+em testes/helpers existentes (`trip-composition`, `trip-rls`,
+`trip-status-visibility.e2e-spec.ts` + `seed-carrier-hire-scenario`/
+`seed-occurrence-scenario`/`seed-pickup-order-scenario`) ganharam `sequence` explícito
+para continuar válidas contra a coluna `NOT NULL` nova.
+
+`prisma migrate deploy` aplicou a 23ª migração sem erro sobre o banco de dev existente.
+193 testes passando (4 unitários + 189 e2e — 3 novos desta unidade, de 186 pra 189).
+`npm run build` e `npm run lint` (`oxlint`) sem erro.
+
+---
+
 ## Pendências
 
 ### Bloqueantes
@@ -1387,7 +1437,5 @@ erro.
 
 ### A observar no operacional
 - [ ] Coletar **todas as planilhas paralelas**, com dados reais dentro
-- [ ] Com que frequência há transbordo (armazenagem intermediária) em lotação — se for
-      comum, `Trip` precisa de sequência dentro do pedido
 - [ ] Como a apólice de seguro restringe tipos de carga, e se isso precisa estar no
       sistema

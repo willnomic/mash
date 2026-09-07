@@ -8,10 +8,12 @@ Atualizado em 08/09/2026, commit `5072cba` (D-033: `Party`, `CarrierProfile`,
 `Vehicle.ownerPartyId`, já em `master`) + trabalho não commitado desta sessão: D-034
 (`PickupOrder`, ordem de coleta em PDF), D-035 (`DocumentCounter`, numeração de
 negócio aplicada a `Order` — fecha a pendência bloqueante que a D-034 tinha
-registrado) e D-036 (auditoria de modelo: `RiskClearance` imutável com `result` em
+registrado), D-036 (auditoria de modelo: `RiskClearance` imutável com `result` em
 enum, `CarrierPayment.netAmount` obrigatório, `CarrierHire.tollVoucher*` movido pra
 `TollVoucherPurchase` — três de quatro achados; o quarto (`Order` sem status/
-cancelamento) não foi endereçado, usuário pediu para não escrever ainda).
+cancelamento) não foi endereçado, usuário pediu para não escrever ainda) e D-037
+(`Trip.sequence` — transbordo, fecha a pendência de frequência de campo com o número
+do sócio: ~1 em 8 viagens).
 
 ---
 
@@ -70,7 +72,12 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
 
 **Operação** (`Trip`, `TripStatus`, `RiskClearance`, `Occurrence`, `OccurrenceType`)
 - `Trip`: um destino por viagem (D-018), composição de veículo (`vehicleId`+
-  `trailer1Id`+`trailer2Id`) pertence à viagem, não ao cadastro
+  `trailer1Id`+`trailer2Id`) pertence à viagem, não ao cadastro. `sequence` (D-037,
+  transbordo): ordem da perna dentro do `Order`, `(orderId, sequence)` único no banco,
+  deliberadamente sem exigir contiguidade — perna cancelada pode deixar buraco, sem
+  numeração-contador (diferente de `Order.number`/D-035, não há motivo fiscal aqui).
+  Encadeamento de endereço entre pernas (destino da N = origem da N+1) é regra de
+  aplicação, não constraint.
 - `TripStatus`: interno/público (`isPublic`, D-010) — só os dois status necessários pra
   provar a distinção estão semeados, não a taxonomia completa
 - `RiskClearance`: ficha de liberação (D-023), só registro, sem integração com
@@ -147,7 +154,7 @@ serviço sem controller nem entidade própria além de `DocumentCounter` — con
 
 ---
 
-## Testes: 190 passando (4 unitários + 186 e2e), zero mock de banco
+## Testes: 193 passando (4 unitários + 189 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -168,6 +175,7 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Tomador é FK própria, obrigatória, não computada | `order-tomador-is-own-field.e2e-spec.ts` |
 | Status compartilhado (`tenantId` nulo = padrão do sistema) | `quote-status-rls.e2e-spec.ts` |
 | Composição de veículo (cavalo+2 carretas, truck sozinho, `CHECK` recusando inválido) | `trip-composition.e2e-spec.ts` |
+| Sequência de perna dentro do pedido (transbordo, D-037): três pernas em sequência, `sequence` duplicada no mesmo `Order` recusada, buraco na sequência aceito | `trip-sequence.e2e-spec.ts` |
 | Status interno não aparece em consulta filtrada por `isPublic` | `trip-status-visibility.e2e-spec.ts` |
 | Contratação congela `agreedFreight`, libera só CIOT, `DELETE` recusado | `carrier-hire-ledger.e2e-spec.ts` |
 | RLS de `TollVoucherPurchase`, formato de CNPJ, valor positivo | `toll-voucher-purchase-rls.e2e-spec.ts` |
@@ -263,7 +271,7 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (22 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (23 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
 - **`pdfkit`/`pdf-parse` instalados nesta sessão** (D-034) — mesmo `--legacy-peer-deps`
   do `nestjs-cls`, nenhuma vulnerabilidade nova no `npm audit` (as 4 de alta severidade

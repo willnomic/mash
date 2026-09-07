@@ -34,6 +34,7 @@ export async function seedCarrierHireScenario(
       tenantId: base.tenant.id,
       branchId: base.branch.id,
       orderId: base.order.id,
+      sequence: 1,
       destinationAddressId: base.address.id,
       driverId: base.driver.id,
       vehicleId: base.tractor.id,

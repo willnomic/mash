@@ -576,6 +576,15 @@ model Trip {
   branch               Branch         @relation(fields: [branchId], references: [id])
   orderId              String         @db.Uuid
   order                Order          @relation(fields: [orderId], references: [id])
+  // Ordem da perna dentro do pedido — transbordo é real (sócio, campo:
+  // ~1 em 8 viagens tem armazenagem/crossdocking intermediário antes do
+  // destino final), então um Order pode ter mais de uma Trip em sequência.
+  // Único dentro do Order, mas NÃO precisa ser contíguo: perna cancelada
+  // pode deixar buraco sem consequência (diferente da numeração de CT-e,
+  // D-015 — lá buraco exige inutilização junto à SEFAZ). Encadeamento de
+  // endereço (destino da perna N = origem da perna N+1) é regra de
+  // aplicação, não constraint — pode haver exceção operacional.
+  sequence             Int
   destinationAddressId String         @db.Uuid
   destinationAddress   Address        @relation(fields: [destinationAddressId], references: [id])
   driverId             String         @db.Uuid
@@ -604,6 +613,7 @@ model Trip {
   // uma emissão ao longo do tempo (correção é emitir de novo, não editar).
   pickupOrders         PickupOrder[]
 
+  @@unique([orderId, sequence])
   @@index([tenantId, branchId])
   @@index([tenantId, orderId])
   @@index([tenantId, statusId])
