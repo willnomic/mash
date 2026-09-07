@@ -7,6 +7,7 @@ import { TenantModule } from './tenant/tenant.module.js';
 import { MeModule } from './me/me.module.js';
 import { QuoteModule } from './quote/quote.module.js';
 import { OrderModule } from './order/order.module.js';
+import { PickupOrderModule } from './pickup-order/pickup-order.module.js';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { OrderModule } from './order/order.module.js';
     MeModule,
     QuoteModule,
     OrderModule,
+    PickupOrderModule,
   ],
   controllers: [AppController],
   providers: [AppService],

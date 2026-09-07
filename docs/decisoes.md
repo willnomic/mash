@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 07/09/2026
+Atualizado em 07/09/2026 (D-034)
 
 ---
 
@@ -1001,6 +1001,105 @@ passando, incluindo o teste que é a razão de existir do renomeio (a mesma `Par
 `party-is-not-a-role.e2e-spec.ts`) e o par de testes de propriedade de veículo
 (`vehicle-owner.e2e-spec.ts`).
 
+---
+
+## D-034 · Ordem de coleta (D-027): `PickupOrder`, geração de PDF sob demanda
+**Status:** Fechada
+
+Primeira unidade com service e controller desde `Trip`/`CarrierHire`/`Occurrence` —
+justificado só pela geração do PDF, que não dá pra testar batendo direto no banco.
+Criação do `PickupOrder` continua via Prisma direto, sem service (não tem regra de
+negócio equivalente ao congelamento de preço do `OrderService`).
+
+### Biblioteca de PDF: `pdfkit`
+
+Critério da D-002 pesado explicitamente (previsibilidade e massa de exemplos acima de
+elegância). Três opções levantadas: `pdfkit` (API de baixo nível por coordenada, puro
+JS, sem dependência nativa), `@react-pdf/renderer` (JSX, motor de layout flexbox-like
+próprio, menos histórico pra documento denso/tabular) e Puppeteer/HTML→PDF (reaproveita
+CSS, mas embarca Chromium headless — ~300MB, risco real de imagem/memória/cold start em
+plataforma gerenciada, D-005). Escolhido `pdfkit` pelo usuário: sem binário externo,
+maior massa de exemplos pra exatamente este caso (documento gerado de um backend Node).
+
+### Layout: fluxo vertical, não posição fixa
+
+Exigência explícita antes de escrever código: `pdfkit` posiciona por coordenada, e
+layout de altura fixa quebra assim que o conteúdo real variar — a relação de itens pode
+ter 1 ou 40 linhas. Implementado como fluxo vertical (`PdfFlow` em
+`pickup-order.pdf.ts`): cada bloco pergunta se cabe (`ensure`) antes de desenhar, nunca
+desenha parcialmente pra descobrir depois que não cabia (isso é o que corta texto).
+Quebra de página automática quando o cursor passa da margem, com o cabeçalho de
+identificação (título + data + remetente + cidade de coleta) redesenhado na página
+nova — o motorista precisa saber de que coleta é a folha 2, sem expor UUID (D-015). O
+cabeçalho de coluna da tabela de itens também redesenha, mas só quando a quebra
+acontece dentro da seção de itens — um `onContinuedPage` setado tarde (só ao entrar na
+seção de itens) evita redesenhar cabeçalho de tabela numa quebra que aconteceu antes
+dela existir, e evita duplo-desenho quando o próprio cabeçalho da tabela não cabe (o
+`ensure` do cabeçalho e o `onContinuedPage` chamariam o mesmo desenho duas vezes se não
+separados em "calcula espaço" vs "só desenha").
+
+Números (peso, quantidade, cubagem) em `Courier` — fonte de largura fixa —, mesma razão
+do `tabular-nums` da D-022: dígito de largura variável não alinha, coluna que não
+alinha é mais lenta de escanear.
+
+**Verificado, não só conferido visualmente:** gerada a mesma ordem com 1 item e com 40.
+1 item produz 1 página; 40 produzem 2, sem sobreposição, com "Item 40" presente e os 40
+itens intactos no texto extraído de volta com `pdf-parse` (`PDFParse` da v2, API por
+classe — `new PDFParse({ data: buffer }).getText()`, devolve `{ text, total }` com
+`total` = contagem real de página). Contagem de cabeçalhos "(continuação)" no texto
+extraído bate com `total - 1`. `pdf-parse` só como devDependency, usado nos testes —
+`@types/pdf-parse` (pensado pra API antiga da v1) foi instalado por engano e removido:
+a v2 é reescrita como classe e já publica os próprios `.d.ts`.
+
+### Modelo
+
+**Âncora é `Trip`, não `Order` direto.** "Dados do motorista" só existe de fato em
+`Trip.driverId`/`vehicleId` (composição, D-018); `Order` 1:N `Trip` significa que cada
+viagem tem sua própria ordem de coleta. `orderId` não é coluna própria — chega-se lá
+via `trip.orderId`, fonte única de verdade (CLAUDE.md 3.2). `tripId` não é único: uma
+viagem pode ter mais de uma emissão ao longo do tempo (corrigir é emitir de novo).
+
+**Relação de itens é tabela filha (`PickupOrderItem`), não campo estruturado.** Lista
+de tamanho variável — mesmo critério que já levou `Address` a ser entidade própria em
+vez de blob (D-018). Este schema não tem `jsonb` em lugar nenhum; um campo estruturado
+duplicaria isso com pior *query-ability* e sem precedente no projeto.
+
+**Totais do cabeçalho (`totalWeightKg`, `totalVolumeCount`, `totalCubicMeters`) são
+congelados na criação, não derivados da soma dos itens** — mesmo critério de
+`Order`/`Quote` (D-014). Não há `CHECK` nem trigger reconciliando item com total: D-030
+não recomenda regra de negócio em trigger, e não foi pedido.
+
+**Peso e cubagem em `Decimal`, escala de `Vehicle.capacityKg`/`tareKg`** (kg, 3 casas) —
+D-013 é sobre dinheiro especificamente, mas o princípio (nunca `number`/float) se
+estende; reaproveitada a escala já existente em vez de inventar uma nova.
+
+**Sem numeração sequencial própria.** A lista de conteúdo do D-027 não pede "número da
+ordem de coleta", e `Order` também não tem número de negócio sequencial ainda (D-015
+antecipa, não construiu) — não inventado aqui pra não estourar escopo. Promovido a
+pendência bloqueante em "Pendências › Bloqueantes" abaixo: não é só a ordem de coleta
+que sente falta disso, é o próprio CT-e que vai precisar.
+
+**Imutável por inteiro** (`PickupOrder` e `PickupOrderItem`): é movimento (`branchId`
+obrigatório, D-011), corrigir é emitir de novo — mesmo critério de `Order`/`CarrierHire`.
+`UPDATE`/`DELETE` revogados do role de aplicação sem exceção de coluna.
+
+### Sem link público, sem storage de arquivo
+
+O endpoint (`GET /pickup-orders/:id/pdf`) gera os bytes na resposta HTTP e devolve via
+`StreamableFile` — nada grava em disco, S3 ou qualquer storage; nada de rota pública
+(a rota exige o mesmo `TenantGuard`/JWT de qualquer rota protegida). Link
+compartilhável fica reservado para quando D-010 construir a segunda camada de
+autorização (embarcador ou motorista sem conta hoje, D-009) — decisão registrada aqui
+por pedido explícito, pra não nascer solta uma rota pública nesta etapa.
+
+### Observado, não alterado
+
+- `Order` não tem número de negócio sequencial — promovido a pendência bloqueante
+  (ver "Pendências › Bloqueantes" abaixo), não é gap solto.
+- `RiskClearance.ownerName` continua texto livre, sem religar com `Vehicle.ownerPartyId`
+  (D-033) — mencionado na D-033 como motivo de existir o campo, não pedido pra religar
+  ainda.
+
 ## Pendências
 
 ### Bloqueantes
@@ -1008,6 +1107,16 @@ passando, incluindo o teste que é a razão de existir do renomeio (a mesma `Par
       Mais urgente que qualquer decisão técnica.
 - [ ] **AT&M tem API para averbação, e a que custo?** Se não tiver, o piloto precisa
       aceitar conscientemente um retrocesso em relação ao sistema atual (D-023).
+- [ ] **D-015 (numeração sequencial de documento de negócio) não implementada —
+      `Order` não tem número.** Não é gap solto: a D-034 (ordem de coleta, PDF) já
+      contornou isso usando data + remetente + cidade como identificação porque não
+      havia número nenhum pra mostrar, mas o operador precisa dizer um número ao
+      motorista no telefone. A mesma lacuna volta com força total no CT-e — ali a
+      numeração é por CNPJ e série, sem buraco, sob validação da SEFAZ, e a D-015 já
+      descreve o mecanismo (tabela contadora com `SELECT ... FOR UPDATE`, nunca
+      `SEQUENCE`, atribuída no momento da transmissão). Não construir agora — só
+      registrado como bloqueante antes de `Order`/CT-e precisarem de número de
+      verdade.
 
 ### Técnicas
 - [ ] Onde entram testes automatizados, e quais primeiro

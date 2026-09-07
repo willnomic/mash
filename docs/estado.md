@@ -4,10 +4,9 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 07/09/2026, commit `88b9722` + trabalho não commitado desta sessão
-(D-033: `Customer`→`Party`, `CarrierProfile`, `Vehicle.ownerPartyId`). `reversesPaymentId`
-(D-032) e `Occurrence`/`OccurrenceType` (D-018), citados como não commitados na versão
-anterior deste arquivo, já estavam no commit `88b9722` — a nota estava desatualizada.
+Atualizado em 07/09/2026, commit `5072cba` (D-033: `Party`, `CarrierProfile`,
+`Vehicle.ownerPartyId`, já em `master`) + trabalho não commitado desta sessão (D-034:
+`PickupOrder`, ordem de coleta em PDF).
 
 ---
 
@@ -70,6 +69,16 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   (`GRANT` de coluna, mesmo mecanismo do `CarrierHire`) — tipo, viagem, filial e
   `occurredAt` congelam. Fora de escopo, não construído: ocorrência mudando status da
   viagem, anexo/foto
+- `PickupOrder`/`PickupOrderItem`: ordem de coleta (D-027, D-034). Âncora é `Trip`
+  (`tripId`), não `Order` direto — "dados do motorista" só existe em
+  `Trip.driverId`/`vehicleId`, `orderId` chega via `trip.orderId`. Itens em tabela
+  filha (não jsonb), mesmo critério de `Address`. Totais do cabeçalho (peso, volumes,
+  cubagem) congelados na criação, não derivados da soma dos itens (D-014). Sem número
+  de negócio sequencial próprio — não pedido, e `Order` também não tem (gap
+  pré-existente, D-015). Imutável por inteiro (`UPDATE`/`DELETE` revogados) — corrigir
+  é emitir de novo, mesmo critério de `Order`/`CarrierHire`. PDF gerado sob demanda na
+  resposta HTTP (`pdfkit`), nunca gravado em disco/storage, sem rota pública — link
+  compartilhável fica reservado pra D-010
 
 **Terceiro** (`CarrierHire`, `CarrierPayment`, `DeductionReason`, D-019)
 - Terceiro não é cadastro próprio — reaproveita `Party` (D-018 aplicado: é uma parte
@@ -95,13 +104,16 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   pagamento que desfaz (`CHECK` nos dois sentidos + índice único parcial contra
   estorno duplicado), migração `20260905001110_carrier_payment_reversal_link`
 
-**Endpoints HTTP hoje:** só três — `GET /` (público), `POST /auth/login` (público),
-`GET /me/users` (protegido, exemplo mínimo de wiring). `Quote`/`Order`/`Trip` têm
-serviço (`QuoteService`, `OrderService`) mas nenhum controller.
+**Endpoints HTTP hoje:** quatro — `GET /` (público), `POST /auth/login` (público),
+`GET /me/users` (protegido, exemplo mínimo de wiring), `GET /pickup-orders/:id/pdf`
+(protegido, gera o PDF sob demanda — D-034). `Quote`/`Order`/`Trip` têm serviço
+(`QuoteService`, `OrderService`) mas nenhum controller; `PickupOrder` tem os dois, mas
+só porque gerar PDF é lógica que não dá pra testar batendo direto no banco — criação
+do registro continua via Prisma direto, sem service.
 
 ---
 
-## Testes: 144 passando (4 unitários + 140 e2e), zero mock de banco
+## Testes: 162 passando (4 unitários + 158 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -128,6 +140,10 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Estorno amarrado a `reversesPaymentId` (`CHECK`, sem duplo estorno), `netAmount <= grossAmount` | `carrier-hire-ledger.e2e-spec.ts` |
 | `OccurrenceType` compartilhado (`tenantId` nulo visível a todos) | `occurrence-type-rls.e2e-spec.ts` |
 | RLS de `Occurrence`, `CHECK occurredAt<=createdAt`, `UPDATE` restrito a `description`, `DELETE` recusado, tipo interno não aparece em consulta filtrada por `isPublic` | `occurrence.e2e-spec.ts` |
+| RLS de `PickupOrder` | `pickup-order-rls.e2e-spec.ts` |
+| RLS de `PickupOrderItem` | `pickup-order-item-rls.e2e-spec.ts` |
+| PDF real (não mock): 1 item cabe em 1 página; 40 itens produzem mais de uma página sem sobrepor nem cortar texto, todos os 40 presentes no texto extraído de volta com `pdf-parse`, cabeçalho "(continuação)" bate com o total de páginas menos uma; `UPDATE`/`DELETE` recusados em `PickupOrder` e `PickupOrderItem` | `pickup-order-pdf.e2e-spec.ts` |
+| Rota `GET /pickup-orders/:id/pdf` ponta a ponta (sem token → 401, com token → PDF com `Content-Type` correto, token de outro tenant não vaza PDF alheio) | `pickup-order-http.e2e-spec.ts` |
 
 Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
@@ -135,8 +151,8 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-Nada no momento — última unidade concluída foi a D-033 (`Party`, `CarrierProfile`,
-`Vehicle.ownerPartyId`), ainda não commitada nesta sessão.
+Nada no momento — última unidade concluída foi a D-034 (`PickupOrder`, ordem de coleta
+em PDF), ainda não commitada nesta sessão.
 
 ---
 
@@ -144,7 +160,6 @@ Nada no momento — última unidade concluída foi a D-033 (`Party`, `CarrierPro
 
 Dentro do escopo v1 (D-028), ainda faltam:
 
-- Ordem de coleta em PDF (D-027)
 - CT-e e MDF-e — emissão via provedor (D-006), importação de XML de NF-e (D-024)
 - Averbação (D-023) — depende de saber se a AT&M tem API (pendência bloqueante em
   `decisoes.md`)
@@ -171,6 +186,17 @@ Dentro do escopo v1 (D-028), ainda faltam:
   `allowScripts`). Verificado que não quebrou nada — build, `prisma generate` e as duas
   suítes de teste passaram normalmente — mas não investigado a fundo; pode importar pra
   CI/deploy se a plataforma usar `npm ci` com esse comportamento.
+- **`npm install pdfkit` (D-034) também exigiu `--legacy-peer-deps`.** Mesma família de
+  problema do item `nestjs-cls` abaixo, não um conflito novo do pdfkit em si: o `npm
+  install` puro falha com `ERESOLVE` porque `nestjs-cls@6.2.2` declara peer
+  `@nestjs/common`/`@nestjs/core` `>= 10 < 12` e o projeto está em `@nestjs/common@12` —
+  qualquer `npm install` que precise re-resolver a árvore de dependências esbarra nisso,
+  não só a instalação inicial. Confirma que **todo `npm install`/`npm ci` futuro no
+  projeto precisa de `--legacy-peer-deps`** enquanto o `nestjs-cls` não publicar suporte
+  a Nest 12 (ou o Nest não for rebaixado) — isso inclui o `npm ci` de deploy (D-005):
+  se a plataforma gerenciada rodar `npm ci` sem essa flag, o build de produção quebra
+  no mesmo `ERESOLVE`. Ainda não verificado se o `npm ci` do pipeline de deploy já
+  passa essa flag — ação pendente antes do primeiro deploy real.
 - **Vulnerabilidades do `npm audit`: decisão registrada, aceitas por ora.** Avaliação
   anterior nesta sessão: transitivas do CLI do Prisma (`mysql2`/`deepmerge-ts`),
   dev-only, não entram no `dist/` do build. Revisitar quando o Prisma atualizar. **Não
@@ -193,5 +219,11 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (17 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (18 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
+- **`pdfkit`/`pdf-parse` instalados nesta sessão** (D-034) — mesmo `--legacy-peer-deps`
+  do `nestjs-cls`, nenhuma vulnerabilidade nova no `npm audit` (as 4 de alta severidade
+  continuam as mesmas do CLI do Prisma, já registradas acima). `@types/pdf-parse` foi
+  instalado por engano (a v2 do `pdf-parse` é reescrita como classe e publica os
+  próprios `.d.ts`; o pacote de tipos era pra API antiga da v1) e removido no mesmo
+  passo — não sobrou no `package.json`.
