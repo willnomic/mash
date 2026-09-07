@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 02/09/2026
+Atualizado em 07/09/2026
 
 ---
 
@@ -923,26 +923,83 @@ provedor antes de fechar quais campos são obrigatórios, e se falta campo de ti
 vale. Se uma viagem puder ter mais de uma compra de vale-pedágio, os três campos viram
 tabela 1:N — não modelado agora, custo baixo de adiar (D-020).
 
-**Dívida de nomenclatura, registrada e não corrigida: `Customer` deveria se chamar
-`Party`.** Desde este commit, `Customer` representa qualquer parte — cliente (D-018) ou
-terceiro contratado (`CarrierHire.thirdPartyId`, aqui). O nome ficou incorreto no
-sentido literal da palavra: "cliente" não descreve um terceiro que a transportadora
-contrata e paga. Não corrigido agora porque renomear é `RENAME TABLE` + todo `import`/
-teste que menciona `Customer` (~10 arquivos) por um problema só de nome, fora do que
-foi pedido nesta etapa (seção 2 do `CLAUDE.md`) — mas registrar aqui evita que, daqui a
-três meses, alguém leia o schema e ache que terceiro está modelado errado por não ter
-cadastro próprio. Não é erro: é `Customer` cumprindo o papel de `Party` sem o nome.
+**Dívida de nomenclatura — corrigida em 07/09/2026 (D-033):** `Customer` foi renomeado
+para `Party` (migração `20260907025604_rename_customer_to_party`, `RENAME`, não
+DROP+ADD — mesmo critério da D-031). Os campos que faltavam (RNTRC, categoria ANTT,
+vínculo agregado/spot) entraram em `CarrierProfile`, também na D-033.
 
-**O que falta quando `CarrierProfile` existir (não construir agora — só registrar
-onde vai morar):**
-- **RNTRC** — registro na ANTT, hoje sem campo nenhum
-- **Categoria ANTT: TAC, ETC e CTC** (Cooperativa de Transporte de Cargas — D-019
-  citava só duas, corrigido nesta sessão) — hoje sem campo, `personType` do `Customer`
-  (PF/PJ) não é a mesma classificação: uma CTC é PJ mas não é ETC
-- **Vínculo agregado vs. spot** — hoje sem campo. D-023 exige essa distinção pra saber
-  qual validade de ficha de liberação aplicar (~12 meses frota/funcionários, ~6 meses
-  agregados, consulta a cada viagem para autônomos/spot) — sem o vínculo registrado, a
-  ficha de liberação não sabe que regra de validade usar pro terceiro
+---
+
+## D-033 · Fecha a dívida de nomenclatura da D-032: `Party`, `CarrierProfile`,
+`Vehicle.ownerPartyId`
+**Status:** Fechada
+
+Três mudanças de modelo, sem service nem controller — mesmo corte de `Trip`,
+`CarrierHire` e `Occurrence`. Migração, modelo e teste em três passos separados,
+suíte rodada entre eles.
+
+### `Customer` → `Party`
+
+`RENAME TABLE`/`RENAME COLUMN`/`RENAME CONSTRAINT`/`RENAME INDEX`, não DROP+ADD —
+mesmo critério da D-031. Migração `20260907025604_rename_customer_to_party`. RLS,
+`GRANT` e o `EXCLUDE USING gist` de `FreightRate` (D-014) seguem o rename de coluna
+sozinhos: o Postgres referencia coluna e tabela por atributo/oid internamente, não
+por nome — só as *constraints/índices com nome próprio* (`Customer_pkey`,
+`Customer_tenantId_cpf_key`, `Customer_cpf_format`, `Address_customerId_fkey`,
+`FreightRate_customerId_fkey` e os índices correspondentes) precisaram de `RENAME`
+explícito, verificado consultando `pg_constraint`/`pg_indexes` depois de aplicar.
+
+Atinge `Address.partyId`, os três papéis do `Order` (`sender`/`recipient`/`tomador` —
+nomes de campo não mudam, só o model referenciado), `FreightRate.partyId` (inclusive
+dentro do `EXCLUDE`) e `CarrierHire.thirdPartyId`. Tela continua dizendo "Clientes" e
+"Transportadores" (D-008 intacto) — o nome do model é vocabulário de código.
+
+Unicidade por documento dentro do tenant já existia (`@@unique([tenantId, cpf])` +
+`@@unique([tenantId, cnpj])`, de quando a tabela ainda era `Customer`) — carregou para
+`Party` sem precisar criar nada novo.
+
+### `CarrierProfile`
+
+Perfil opcional 1:1 com `Party` (`partyId` único) — é a existência do perfil que torna
+a parte um transportador contratável, não um campo a mais no cadastro do cliente.
+Campos: `rntrc` (texto livre, sem `CHECK` de formato — mesmo critério de
+`Vehicle.renavam`, seção 1.6 do `CLAUDE.md`), `anttCategory` (enum `TAC`/`ETC`/`CTC` —
+fixo por regulação, exceção D-020), `bondType` (enum `SPOT`/`AGREGADO` — fixo pelo
+sistema, valores em português por serem vocabulário do setor, mesmo critério de
+`VehicleType`). RLS padrão. Nada no banco hoje obriga `CarrierHire.thirdPartyId` a ter
+`CarrierProfile` — a obrigatoriedade, se um dia existir, é regra de aplicação (D-030),
+não constraint.
+
+**`CustomerProfile` não foi construído — decisão consciente, não esquecimento.** Os
+campos de cliente já vivem em `Party` (cadastro único desde D-018) e ninguém pediu
+para separá-los. Criar `CustomerProfile` agora seria abstração especulativa sem caso de
+uso (seção 2 do `CLAUDE.md`).
+
+### `Vehicle.ownerPartyId`
+
+FK anulável para `Party`. Nulo = frota própria do tenant; preenchido = de terceiro, com
+o proprietário nominal que a ficha de liberação de risco (D-023) exige —
+`RiskClearance.ownerName` hoje é só texto livre, sem vínculo a nenhum cadastro, e este
+campo é o que torna o proprietário identificável (não pedido para religar as duas
+tabelas agora — só registrado o motivo).
+
+**O enum `VehicleOwnership` (`OWNED`/`THIRD_PARTY`) foi eliminado**, não mantido ao
+lado da FK. Um enum paralelo poderia divergir do `ownerPartyId` — por exemplo
+`ownership = 'OWNED'` com `ownerPartyId` preenchido — e nada no banco impediria essa
+inconsistência. Contra a seção 3.2 do `CLAUDE.md` (fonte única de verdade): a
+propriedade passa a ser derivada só da nulidade da FK. Migração
+`20260907030434_vehicle_owner_party`: `DROP COLUMN "ownership"` + `DROP TYPE
+"VehicleOwnership"` (não é rename — é remoção de um campo redundante em favor de outra
+representação, critério diferente do `Customer`→`Party`, que preservava o mesmo dado).
+
+### Verificação
+
+Migração deploy incremental entre os três passos; ao final, `prisma migrate reset
+--force` reaplicou as 17 migrações do zero sem erro. 140 testes e2e + 4 unitários
+passando, incluindo o teste que é a razão de existir do renomeio (a mesma `Party` como
+`tomador` de um `Order` e `thirdParty` de um `CarrierHire` ao mesmo tempo,
+`party-is-not-a-role.e2e-spec.ts`) e o par de testes de propriedade de veículo
+(`vehicle-owner.e2e-spec.ts`).
 
 ## Pendências
 

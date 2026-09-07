@@ -92,7 +92,6 @@ export async function seedOrderScenario(
       plate: 'ABC1D23',
       renavam: '12345678900',
       type: 'CAVALO_MECANICO',
-      ownership: 'OWNED',
       capacityKg: '25000',
       tareKg: '8000',
     },
@@ -104,7 +103,6 @@ export async function seedOrderScenario(
       plate: 'ABC1D24',
       renavam: '12345678901',
       type: 'CARRETA',
-      ownership: 'OWNED',
       capacityKg: '30000',
       tareKg: '7000',
     },
@@ -116,7 +114,9 @@ export async function seedOrderScenario(
       plate: 'ABC1D25',
       renavam: '12345678902',
       type: 'CARRETA',
-      ownership: 'THIRD_PARTY',
+      // De terceiro — mesma Party que já é cliente do cenário, provando
+      // de novo que a mesma parte pode exercer papéis diferentes (D-032).
+      ownerPartyId: party.id,
       capacityKg: '30000',
       tareKg: '7000',
     },

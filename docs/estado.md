@@ -4,8 +4,10 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 06/09/2026, commit `d9a3eee` + trabalho não commitado desta sessão
-(correção `reversesPaymentId` do D-032 e `Occurrence`/`OccurrenceType` do D-018).
+Atualizado em 07/09/2026, commit `88b9722` + trabalho não commitado desta sessão
+(D-033: `Customer`→`Party`, `CarrierProfile`, `Vehicle.ownerPartyId`). `reversesPaymentId`
+(D-032) e `Occurrence`/`OccurrenceType` (D-018), citados como não commitados na versão
+anterior deste arquivo, já estavam no commit `88b9722` — a nota estava desatualizada.
 
 ---
 
@@ -21,12 +23,22 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
 - `Tenant` nasce com filial padrão numa transação só (`TenantsService`, D-011/D-030 — não
   por trigger, preserva D-015)
 
-**Cadastro** (`Tenant`, `Branch`, `User`, `Customer`, `Address`, `Driver`, `Vehicle`, `Lane`)
+**Cadastro** (`Tenant`, `Branch`, `User`, `Party`, `Address`, `Driver`, `Vehicle`, `Lane`,
+`CarrierProfile`)
 - `User`: papéis `OPERATOR`/`MANAGER`/`FINANCE`/`ADMIN` (D-009)
-- `Customer`+`Address`: PF/PJ, papel é relacionamento do `Order`, nunca campo do cadastro
-  (D-018)
+- `Party`+`Address`: PF/PJ, papel é relacionamento do `Order`/`CarrierHire`, nunca campo
+  do cadastro (D-018). Renomeado de `Customer` na D-033 — a mesma parte pode ser cliente
+  e terceiro contratado, o nome antigo mentia; RENAME de tabela/coluna, não DROP+ADD
+  (mesmo critério da D-031)
+- `CarrierProfile`: 1:1 opcional com `Party` — RNTRC, categoria ANTT (`TAC`/`ETC`/`CTC`),
+  vínculo (`SPOT`/`AGREGADO`); existência do perfil é o que torna a parte contratável
+  (D-019/D-023, D-033). `CustomerProfile` não construído — decisão consciente, campos de
+  cliente já vivem em `Party`
 - `Driver`: sem login (D-009), CNH, `EMPLOYEE`/`SELF_EMPLOYED` (D-019)
-- `Vehicle`: sem composição no cadastro — isso é do `Trip` (D-018)
+- `Vehicle`: sem composição no cadastro — isso é do `Trip` (D-018). `ownerPartyId`
+  anulável para `Party` (D-023/D-033) — nulo é frota própria, preenchido é de terceiro
+  com proprietário nominal identificável; substituiu o enum `VehicleOwnership` (fonte
+  única de verdade, um enum paralelo à FK podia divergir dela)
 - `Lane`: trecho origem-destino
 
 **Comercial** (`FreightRate`, `QuoteStatus`, `Quote`, `Order`)
@@ -34,7 +46,7 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   de coluna — só `validTo`/`updatedAt` são alteráveis, `DELETE` revogado
 - `Quote`: status em tabela (D-020), congela valores da `FreightRate` no fechamento
 - `Order`: `branchId` obrigatório (D-011), `senderId`/`recipientId`/`tomadorId` como três
-  FKs próprias pro `Customer` (D-031 — só `tomador` fica em português, tem definição
+  FKs próprias pra `Party` (D-031 — só `tomador` fica em português, tem definição
   fiscal; os outros dois traduzem sem perda), congela valor nos dois caminhos de
   precificação (via `Quote` ou direto da `FreightRate`), sem nenhum `UPDATE` liberado
 
@@ -60,7 +72,7 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   viagem, anexo/foto
 
 **Terceiro** (`CarrierHire`, `CarrierPayment`, `DeductionReason`, D-019)
-- Terceiro não é cadastro próprio — reaproveita `Customer` (D-018 aplicado: é uma parte
+- Terceiro não é cadastro próprio — reaproveita `Party` (D-018 aplicado: é uma parte
   que exerce papel), papel vive em `CarrierHire.thirdPartyId`
 - `CarrierHire`: contratação 1:1 com `Trip`, só `agreedFreight` congela; CIOT
   (`ciotNumber`, só TAC) e vale-pedágio (`tollVoucherSupplierCnpj`+
@@ -76,14 +88,12 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   o mesmo pagamento duas vezes); `netAmount <= grossAmount`
 - `DeductionReason`: motivo do desconto em tabela, não enum (D-020) — mesmo padrão
   `QuoteStatus`/`TripStatus`; semeados `DAMAGE`/`DETENTION`/`FINE`/`FUEL`
-- Decisão registrada em `decisoes.md` (D-032). **Dívida registrada, não corrigida:**
-  `Customer` deveria se chamar `Party` (representa cliente e terceiro); faltam RNTRC,
-  categoria ANTT (TAC/ETC/CTC) e vínculo agregado-vs-spot — vão morar em
-  `CarrierProfile` quando existir (D-032)
+- Decisão registrada em `decisoes.md` (D-032). Dívida de nomenclatura (`Customer`
+  deveria se chamar `Party`) e os campos que faltavam (RNTRC, categoria ANTT, vínculo
+  agregado-vs-spot) foram corrigidos na D-033 — ver `Party`/`CarrierProfile` acima
 - `CarrierPayment.reversesPaymentId`: correção do D-032 amarrando `REVERSAL` ao
   pagamento que desfaz (`CHECK` nos dois sentidos + índice único parcial contra
-  estorno duplicado) — commit `d9a3eee` não tem essa coluna, aplicada em migração
-  separada (`20260905001110_carrier_payment_reversal_link`) ainda não commitada
+  estorno duplicado), migração `20260905001110_carrier_payment_reversal_link`
 
 **Endpoints HTTP hoje:** só três — `GET /` (público), `POST /auth/login` (público),
 `GET /me/users` (protegido, exemplo mínimo de wiring). `Quote`/`Order`/`Trip` têm
@@ -91,7 +101,7 @@ serviço (`QuoteService`, `OrderService`) mas nenhum controller.
 
 ---
 
-## Testes: 134 passando (4 unitários + 130 e2e), zero mock de banco
+## Testes: 144 passando (4 unitários + 140 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -102,8 +112,10 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Guarda de schema (toda tabela tem RLS forçado) | `rls-schema-guard.e2e-spec.ts` |
 | Login, guard, token forjado não muda o tenant usado | `auth.e2e-spec.ts` |
 | Filial padrão nasce junto com o tenant | `tenant-provisioning.e2e-spec.ts` |
-| `Customer` não vira papel (guarda estrutural + funcional) | `customer-is-not-a-role.e2e-spec.ts` |
+| `Party` não vira papel (guarda estrutural + funcional), mesma `Party` é tomador de um `Order` e terceiro de um `CarrierHire` ao mesmo tempo | `party-is-not-a-role.e2e-spec.ts` |
 | `Vehicle` sem referência de composição (guarda estrutural) | `vehicle-has-no-composition.e2e-spec.ts` |
+| RLS de `CarrierProfile`, 1:1 (segundo perfil pra mesma `Party` recusado), `Party` sem perfil segue contratável no banco | `carrier-profile-rls.e2e-spec.ts` |
+| Veículo próprio sem `ownerPartyId`, veículo de terceiro com proprietário identificável (`Party` real, não texto livre), FK recusa `ownerPartyId` inexistente | `vehicle-owner.e2e-spec.ts` |
 | Sobreposição de vigência recusada/aceita, consulta por data, imutabilidade | `freight-rate-validity.e2e-spec.ts` |
 | Decimal: operador nativo concatena, `.plus()`/`.times()` somam certo | `freight-rate-decimal.spec.ts` |
 | Dois caminhos de precificação, valor congelado estável, `UPDATE`/`DELETE` recusados | `order-pricing.e2e-spec.ts` |
@@ -123,10 +135,8 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-Nada no momento — última unidade concluída foi `Occurrence`/`OccurrenceType` (D-018),
-ainda não commitada nesta sessão. Também não commitada: a correção
-`reversesPaymentId` do D-032 (`CarrierPayment`), que já estava no working tree quando
-esta sessão começou.
+Nada no momento — última unidade concluída foi a D-033 (`Party`, `CarrierProfile`,
+`Vehicle.ownerPartyId`), ainda não commitada nesta sessão.
 
 ---
 
@@ -183,5 +193,5 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (11 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (17 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
