@@ -36,6 +36,8 @@ model Tenant {
   deductionReasons DeductionReason[]
   carrierHires     CarrierHire[]
   carrierPayments  CarrierPayment[]
+  occurrenceTypes  OccurrenceType[]
+  occurrences      Occurrence[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
@@ -52,6 +54,7 @@ model Branch {
   orders    Order[]
   trips     Trip[]
   carrierHires CarrierHire[]
+  occurrences  Occurrence[]
 
   @@index([tenantId])
 }
@@ -528,6 +531,9 @@ model Trip {
   // terceirizada. FK vive em CarrierHire (dependente carrega a
   // referência), não aqui — mesmo critério de Address -> Customer.
   carrierHire        CarrierHire?
+  // Eventos da viagem (D-018) — FK vive em Occurrence, não aqui, mesmo
+  // critério de CarrierHire.
+  occurrences        Occurrence[]
 
   @@index([tenantId, branchId])
   @@index([tenantId, orderId])
@@ -621,7 +627,8 @@ model CarrierHire {
 // nunca do número (mesmo critério de "banco garante, não confiar em
 // disciplina" do D-012/D-014/D-029). netAmount é o que foi efetivamente
 // transferido — pagamento a TAC pessoa física tem retenção, por isso
-// separado do valor bruto que compõe o saldo.
+// separado do valor bruto que compõe o saldo; nunca maior que o bruto
+// (CHECK na migração — retenção não é negativa).
 //
 // Sem branchId: é filho de CarrierHire, que já carrega — mesmo critério
 // do Address não duplicar o que o Customer já modela.
@@ -643,6 +650,17 @@ model CarrierPayment {
   deductionReasonId String?          @db.Uuid
   deductionReason   DeductionReason? @relation(fields: [deductionReasonId], references: [id])
 
+  // Correção obrigatória (D-017): REVERSAL sempre aponta pro pagamento
+  // que desfaz — CHECK na migração amarra nos dois sentidos (só REVERSAL
+  // preenche, REVERSAL sempre preenche) e um índice único parcial
+  // impede estornar o mesmo pagamento duas vezes. Não valida (nem CHECK
+  // nem trigger) que o pagamento revertido pertence ao mesmo
+  // CarrierHire, nem que o valor bate — não pedido, ficaria pra
+  // aplicação se um dia importar.
+  reversesPaymentId String?          @db.Uuid
+  reversesPayment   CarrierPayment?  @relation("PaymentReversal", fields: [reversesPaymentId], references: [id])
+  reversedBy        CarrierPayment[] @relation("PaymentReversal")
+
   // Data de calendário, não timestamp (D-016) — data do pagamento não
   // tem hora própria relevante ao domínio.
   paymentDate DateTime @db.Date
@@ -655,4 +673,69 @@ model CarrierPayment {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([tenantId, carrierHireId])
+}
+
+// Lista de domínio em tabela, não enum (D-020) — a D-020 cita "tipos de
+// ocorrência" nominalmente como lista que varia por transportadora.
+// Mesmo padrão de QuoteStatus/TripStatus/DeductionReason: tenantId nulo
+// = padrão do sistema, preenchido = daquele tenant.
+//
+// isPublic mora aqui, não em Occurrence — espelha TripStatus (D-010): é
+// o TIPO de evento que determina se o cliente pode ver, não a instância.
+// Deixar na ocorrência reabriria por instância a pergunta que o
+// vocabulário já responde, e permitiria duas ocorrências do mesmo tipo
+// divergirem em visibilidade por decisão de quem registrou.
+model OccurrenceType {
+  id          String       @id @db.Uuid
+  tenantId    String?      @db.Uuid
+  tenant      Tenant?      @relation(fields: [tenantId], references: [id])
+  code        String
+  name        String
+  isPublic    Boolean      @default(false)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
+  occurrences Occurrence[]
+
+  @@unique([tenantId, code])
+}
+
+// Evento da viagem (D-018) — alimenta o portal do embarcador (D-010),
+// onde a distinção interna/pública de OccurrenceType.isPublic vai ser
+// usada para filtrar o que o cliente enxerga. branchId obrigatório:
+// movimento é da filial (D-011), mesmo critério de Order/Trip/CarrierHire.
+//
+// occurredAt (quando o fato aconteceu na estrada) é distinto de
+// createdAt (quando foi lançado no sistema) — não são a mesma coisa,
+// ocorrência da madrugada lançada de manhã é rotina. CHECK no banco
+// garante occurredAt <= createdAt, não só disciplina da aplicação
+// (mesmo critério de D-012/D-014/D-029).
+//
+// Fora de escopo, não construído aqui: ocorrência mudando status da
+// viagem (seria regra de aplicação, não trigger, D-030) e anexo/foto
+// (não existe armazenamento de arquivo no projeto ainda).
+//
+// DELETE revogado do role de aplicação: é registro do que aconteceu e
+// vai para o cliente pela D-010 — mesmo critério de RiskClearance
+// (D-023/D-017), apagar depois é pior que não ter registrado. UPDATE só
+// libera description e updatedAt (GRANT por coluna, mesmo mecanismo do
+// CarrierHire) — tipo, viagem, filial e occurredAt não mudam depois de
+// registrados.
+model Occurrence {
+  id          String         @id @db.Uuid
+  tenantId    String         @db.Uuid
+  tenant      Tenant         @relation(fields: [tenantId], references: [id])
+  branchId    String         @db.Uuid
+  branch      Branch         @relation(fields: [branchId], references: [id])
+  tripId      String         @db.Uuid
+  trip        Trip           @relation(fields: [tripId], references: [id])
+  typeId      String         @db.Uuid
+  type        OccurrenceType @relation(fields: [typeId], references: [id])
+  description String
+  occurredAt  DateTime       @db.Timestamptz(3)
+  createdAt   DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime       @updatedAt @db.Timestamptz(3)
+
+  @@index([tenantId, branchId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, typeId])
 }

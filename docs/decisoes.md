@@ -423,7 +423,7 @@ produto incompleto — é produto que não serve.
 
 | Entra na v1 | Fica para depois |
 |---|---|
-| Cadastro de terceiro (TAC e ETC) | Emitir CIOT pelo Mash |
+| Cadastro de terceiro (TAC, ETC e CTC) | Emitir CIOT pelo Mash |
 | Contratação da viagem com terceiro | Emitir vale-pedágio pelo Mash |
 | Frete acordado, adiantamento, saldo, status | Integração com instituição equiparada |
 | Campos para **registrar** CIOT e vale-pedágio emitidos fora | |
@@ -901,6 +901,18 @@ de D-012/D-014/D-029. `UPDATE`/`DELETE` revogados por inteiro em `CarrierPayment
 (não `GRANT` de coluna como `FreightRate`/`Quote`/`CarrierHire`): nenhuma coluna aqui
 legitimamente muda depois de criada — correção é `REVERSAL`, linha nova.
 
+**Correção 05/09/2026:** `REVERSAL` nasceu sem amarra a qual pagamento desfazia —
+qualquer linha `REVERSAL` batia o saldo certo aritmeticamente, mas sem apontar pra
+nada, o que não prova correção nenhuma (duas reversões da mesma parcela, ou uma
+reversão "solta" sem origem, passavam batido). Corrigido com `reversesPaymentId`
+(auto-relação anulável em `CarrierPayment`) mais `CHECK` `(type = 'REVERSAL') =
+(reversesPaymentId IS NOT NULL)` — mesmo mecanismo do `deductionReasonId` — e um
+índice único parcial em `reversesPaymentId` (impede estornar o mesmo pagamento duas
+vezes). Não valida (nem `CHECK`, que não enxerga outra linha, nem trigger — D-030 não
+recomenda lógica de negócio em trigger) que o pagamento revertido pertence ao mesmo
+`CarrierHire`, nem que o valor do estorno bate com o original; fica pra aplicação se um
+dia importar.
+
 **Vale-pedágio nunca entra no cálculo.** Por lei não compõe o valor do frete nem a
 base de tributo — não é frete, não é desconto. Se entrasse em `agreedFreight` ou
 virasse `CarrierPayment` tipo `DEDUCTION`, contaminaria a base de tributo. Por isso
@@ -910,6 +922,27 @@ vive só em `CarrierHire`, fora do livro de eventos.
 provedor antes de fechar quais campos são obrigatórios, e se falta campo de tipo do
 vale. Se uma viagem puder ter mais de uma compra de vale-pedágio, os três campos viram
 tabela 1:N — não modelado agora, custo baixo de adiar (D-020).
+
+**Dívida de nomenclatura, registrada e não corrigida: `Customer` deveria se chamar
+`Party`.** Desde este commit, `Customer` representa qualquer parte — cliente (D-018) ou
+terceiro contratado (`CarrierHire.thirdPartyId`, aqui). O nome ficou incorreto no
+sentido literal da palavra: "cliente" não descreve um terceiro que a transportadora
+contrata e paga. Não corrigido agora porque renomear é `RENAME TABLE` + todo `import`/
+teste que menciona `Customer` (~10 arquivos) por um problema só de nome, fora do que
+foi pedido nesta etapa (seção 2 do `CLAUDE.md`) — mas registrar aqui evita que, daqui a
+três meses, alguém leia o schema e ache que terceiro está modelado errado por não ter
+cadastro próprio. Não é erro: é `Customer` cumprindo o papel de `Party` sem o nome.
+
+**O que falta quando `CarrierProfile` existir (não construir agora — só registrar
+onde vai morar):**
+- **RNTRC** — registro na ANTT, hoje sem campo nenhum
+- **Categoria ANTT: TAC, ETC e CTC** (Cooperativa de Transporte de Cargas — D-019
+  citava só duas, corrigido nesta sessão) — hoje sem campo, `personType` do `Customer`
+  (PF/PJ) não é a mesma classificação: uma CTC é PJ mas não é ETC
+- **Vínculo agregado vs. spot** — hoje sem campo. D-023 exige essa distinção pra saber
+  qual validade de ficha de liberação aplicar (~12 meses frota/funcionários, ~6 meses
+  agregados, consulta a cada viagem para autônomos/spot) — sem o vínculo registrado, a
+  ficha de liberação não sabe que regra de validade usar pro terceiro
 
 ## Pendências
 

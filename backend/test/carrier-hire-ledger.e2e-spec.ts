@@ -209,9 +209,52 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
     expect(balance.toString()).toBe('1300');
   });
 
-  it('estorno devolve o valor ao saldo', async () => {
+  it('recusa REVERSAL sem reversesPaymentId (CHECK no banco)', async () => {
+    await expect(
+      forTenant(seed.tenant.id).carrierPayment.create({
+        data: {
+          id: uuidv7(),
+          tenantId: seed.tenant.id,
+          carrierHireId: hire.id,
+          type: 'REVERSAL',
+          grossAmount: '1000',
+          paymentDate: new Date('2026-01-06'),
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('recusa reversesPaymentId em evento que não é REVERSAL', async () => {
     const tenantPrisma = forTenant(seed.tenant.id);
-    await tenantPrisma.carrierPayment.create({
+    const advance = await tenantPrisma.carrierPayment.create({
+      data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
+        type: 'ADVANCE',
+        grossAmount: '1000',
+        paymentDate: new Date('2026-01-05'),
+      },
+    });
+
+    await expect(
+      tenantPrisma.carrierPayment.create({
+        data: {
+          id: uuidv7(),
+          tenantId: seed.tenant.id,
+          carrierHireId: hire.id,
+          type: 'ADVANCE',
+          grossAmount: '500',
+          reversesPaymentId: advance.id,
+          paymentDate: new Date('2026-01-06'),
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('recusa estornar o mesmo pagamento duas vezes (índice único parcial)', async () => {
+    const tenantPrisma = forTenant(seed.tenant.id);
+    const advance = await tenantPrisma.carrierPayment.create({
       data: {
         id: uuidv7(),
         tenantId: seed.tenant.id,
@@ -228,6 +271,66 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
         carrierHireId: hire.id,
         type: 'REVERSAL',
         grossAmount: '1000',
+        reversesPaymentId: advance.id,
+        paymentDate: new Date('2026-01-06'),
+      },
+    });
+
+    await expect(
+      tenantPrisma.carrierPayment.create({
+        data: {
+          id: uuidv7(),
+          tenantId: seed.tenant.id,
+          carrierHireId: hire.id,
+          type: 'REVERSAL',
+          grossAmount: '1000',
+          reversesPaymentId: advance.id,
+          paymentDate: new Date('2026-01-07'),
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('recusa netAmount maior que grossAmount — retenção nunca é maior que o bruto', async () => {
+    await expect(
+      forTenant(seed.tenant.id).carrierPayment.create({
+        data: {
+          id: uuidv7(),
+          tenantId: seed.tenant.id,
+          carrierHireId: hire.id,
+          type: 'ADVANCE',
+          grossAmount: '1000',
+          netAmount: '1000.01',
+          paymentDate: new Date('2026-01-05'),
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('estorno válido devolve o saldo ao valor anterior', async () => {
+    const tenantPrisma = forTenant(seed.tenant.id);
+    const advance = await tenantPrisma.carrierPayment.create({
+      data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
+        type: 'ADVANCE',
+        grossAmount: '1000',
+        paymentDate: new Date('2026-01-05'),
+      },
+    });
+
+    const balanceAfterAdvance = computeBalance(hire.agreedFreight, [advance]);
+    expect(balanceAfterAdvance.toString()).toBe('2000');
+
+    await tenantPrisma.carrierPayment.create({
+      data: {
+        id: uuidv7(),
+        tenantId: seed.tenant.id,
+        carrierHireId: hire.id,
+        type: 'REVERSAL',
+        grossAmount: '1000',
+        reversesPaymentId: advance.id,
         paymentDate: new Date('2026-01-06'),
       },
     });
