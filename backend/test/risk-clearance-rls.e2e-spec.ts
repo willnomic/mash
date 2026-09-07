@@ -32,7 +32,7 @@ describe('RiskClearance · Row-Level Security (D-012)', () => {
   let b: Awaited<ReturnType<typeof seedOrderScenario>>;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     a = await seedOrderScenario(admin, 'A', 'transportadora-a');
     b = await seedOrderScenario(admin, 'B', 'transportadora-b');
     await seedClearance(a);
@@ -40,7 +40,7 @@ describe('RiskClearance · Row-Level Security (D-012)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await admin.$disconnect();
     await base.$disconnect();
   });

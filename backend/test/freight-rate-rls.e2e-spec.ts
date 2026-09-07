@@ -15,7 +15,7 @@ async function seedTenant(name: string, slug: string) {
   const tenant = await admin.tenant.create({
     data: { id: uuidv7(), name, slug },
   });
-  const customer = await admin.customer.create({
+  const party = await admin.party.create({
     data: {
       id: uuidv7(),
       tenantId: tenant.id,
@@ -34,7 +34,7 @@ async function seedTenant(name: string, slug: string) {
       destinationState: 'PR',
     },
   });
-  return { tenant, customer, lane };
+  return { tenant, party, lane };
 }
 
 describe('FreightRate · Row-Level Security (D-012)', () => {
@@ -42,7 +42,7 @@ describe('FreightRate · Row-Level Security (D-012)', () => {
   let b: Awaited<ReturnType<typeof seedTenant>>;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     a = await seedTenant('A', 'transportadora-a');
     b = await seedTenant('B', 'transportadora-b');
@@ -50,7 +50,7 @@ describe('FreightRate · Row-Level Security (D-012)', () => {
       data: {
         id: uuidv7(),
         tenantId: a.tenant.id,
-        customerId: a.customer.id,
+        partyId: a.party.id,
         laneId: a.lane.id,
         validFrom: new Date('2026-01-01'),
         validTo: new Date('2026-12-31'),
@@ -63,7 +63,7 @@ describe('FreightRate · Row-Level Security (D-012)', () => {
       data: {
         id: uuidv7(),
         tenantId: b.tenant.id,
-        customerId: b.customer.id,
+        partyId: b.party.id,
         laneId: b.lane.id,
         validFrom: new Date('2026-01-01'),
         validTo: new Date('2026-12-31'),
@@ -75,7 +75,7 @@ describe('FreightRate · Row-Level Security (D-012)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
@@ -107,7 +107,7 @@ describe('FreightRate · Row-Level Security (D-012)', () => {
         data: {
           id: uuidv7(),
           tenantId: b.tenant.id,
-          customerId: b.customer.id,
+          partyId: b.party.id,
           laneId: b.lane.id,
           validFrom: new Date('2027-01-01'),
           validTo: new Date('2027-12-31'),

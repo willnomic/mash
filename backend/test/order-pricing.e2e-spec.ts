@@ -29,7 +29,7 @@ async function seedTenant(name: string, slug: string) {
   const branch = await admin.branch.create({
     data: { id: uuidv7(), tenantId: tenant.id, name: 'Matriz' },
   });
-  const customer = await admin.customer.create({
+  const party = await admin.party.create({
     data: {
       id: uuidv7(),
       tenantId: tenant.id,
@@ -48,7 +48,7 @@ async function seedTenant(name: string, slug: string) {
       destinationState: 'PR',
     },
   });
-  return { tenant, branch, customer, lane };
+  return { tenant, branch, party, lane };
 }
 
 describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', () => {
@@ -57,7 +57,7 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
   let orderService: OrderService;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Customer", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     seed = await seedTenant('A', 'transportadora-a');
     const tenantPrisma = tenantPrismaFor(seed.tenant.id);
@@ -66,7 +66,7 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Customer", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
@@ -77,7 +77,7 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
       data: {
         id: uuidv7(),
         tenantId: seed.tenant.id,
-        customerId: seed.customer.id,
+        partyId: seed.party.id,
         laneId: seed.lane.id,
         validFrom: new Date(validFrom),
         validTo: new Date(validTo),
@@ -100,9 +100,9 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromQuote({
       quoteId: quote.id,
       branchId: seed.branch.id,
-      senderId: seed.customer.id,
-      recipientId: seed.customer.id,
-      tomadorId: seed.customer.id,
+      senderId: seed.party.id,
+      recipientId: seed.party.id,
+      tomadorId: seed.party.id,
     });
 
     expect(order.quoteId).toBe(quote.id);
@@ -117,9 +117,9 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: freightRate.id,
       branchId: seed.branch.id,
-      senderId: seed.customer.id,
-      recipientId: seed.customer.id,
-      tomadorId: seed.customer.id,
+      senderId: seed.party.id,
+      recipientId: seed.party.id,
+      tomadorId: seed.party.id,
       total: '900',
     });
 
@@ -135,14 +135,14 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: originalRate.id,
       branchId: seed.branch.id,
-      senderId: seed.customer.id,
-      recipientId: seed.customer.id,
-      tomadorId: seed.customer.id,
+      senderId: seed.party.id,
+      recipientId: seed.party.id,
+      tomadorId: seed.party.id,
       total: '500',
     });
 
     // Fecha a linha original (único UPDATE permitido, GRANT por coluna) e
-    // abre uma nova com tarifa diferente para o mesmo tenant+customer+lane.
+    // abre uma nova com tarifa diferente para o mesmo tenant+party+lane.
     await forTenant(seed.tenant.id).freightRate.update({
       where: { id: originalRate.id },
       data: { validTo: new Date('2026-07-01') },
@@ -161,9 +161,9 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: freightRate.id,
       branchId: seed.branch.id,
-      senderId: seed.customer.id,
-      recipientId: seed.customer.id,
-      tomadorId: seed.customer.id,
+      senderId: seed.party.id,
+      recipientId: seed.party.id,
+      tomadorId: seed.party.id,
       total: '500',
     });
 
@@ -180,9 +180,9 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     const order = await orderService.createFromFreightRate({
       freightRateId: freightRate.id,
       branchId: seed.branch.id,
-      senderId: seed.customer.id,
-      recipientId: seed.customer.id,
-      tomadorId: seed.customer.id,
+      senderId: seed.party.id,
+      recipientId: seed.party.id,
+      tomadorId: seed.party.id,
       total: '500',
     });
 

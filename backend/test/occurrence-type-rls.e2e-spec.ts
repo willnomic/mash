@@ -17,7 +17,7 @@ describe('OccurrenceType · RLS com padrão do sistema (D-020)', () => {
   let tenantB: { id: string };
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Occurrence", "OccurrenceType", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Occurrence", "OccurrenceType", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureOccurrenceTypesSeeded(admin);
     await admin.$executeRaw`DELETE FROM "OccurrenceType" WHERE "tenantId" IS NOT NULL`;
     tenantA = await admin.tenant.create({
@@ -29,7 +29,7 @@ describe('OccurrenceType · RLS com padrão do sistema (D-020)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Occurrence", "OccurrenceType", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Occurrence", "OccurrenceType", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureOccurrenceTypesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();

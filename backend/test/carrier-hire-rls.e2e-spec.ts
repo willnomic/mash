@@ -17,7 +17,7 @@ describe('CarrierHire · Row-Level Security (D-012)', () => {
   let seedB: Awaited<ReturnType<typeof seedCarrierHireScenario>>;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     seedA = await seedCarrierHireScenario(admin, 'A', 'transportadora-a');
     seedB = await seedCarrierHireScenario(admin, 'B', 'transportadora-b');
@@ -45,7 +45,7 @@ describe('CarrierHire · Row-Level Security (D-012)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();

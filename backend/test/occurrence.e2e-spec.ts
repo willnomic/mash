@@ -13,7 +13,7 @@ const admin = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
-const TRUNCATE = `TRUNCATE TABLE "Occurrence", "OccurrenceType", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+const TRUNCATE = `TRUNCATE TABLE "Occurrence", "OccurrenceType", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
 
 describe('Occurrence · evento da viagem (D-018)', () => {
   let seedA: Awaited<ReturnType<typeof seedOccurrenceScenario>>;

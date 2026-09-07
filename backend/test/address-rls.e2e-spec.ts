@@ -5,7 +5,7 @@ import { base, forTenant } from '../src/prisma/prisma-tenant.js';
 import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 
 // Roda contra o PostgreSQL real do docker-compose (não mock: RLS é do
-// banco). Address carrega tenantId e RLS próprios (não herda do Customer
+// banco). Address carrega tenantId e RLS próprios (não herda da Party
 // via join) — este arquivo prova que isso realmente segura.
 const admin = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -14,11 +14,11 @@ const admin = new PrismaClient({
 describe('Address · Row-Level Security (D-012)', () => {
   let tenantA: { id: string };
   let tenantB: { id: string };
-  let customerA: { id: string };
-  let customerB: { id: string };
+  let partyA: { id: string };
+  let partyB: { id: string };
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Address", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Address", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     tenantA = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
@@ -26,7 +26,7 @@ describe('Address · Row-Level Security (D-012)', () => {
     tenantB = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora B', slug: 'transportadora-b' },
     });
-    customerA = await admin.customer.create({
+    partyA = await admin.party.create({
       data: {
         id: uuidv7(),
         tenantId: tenantA.id,
@@ -35,7 +35,7 @@ describe('Address · Row-Level Security (D-012)', () => {
         cpf: '52998224725',
       },
     });
-    customerB = await admin.customer.create({
+    partyB = await admin.party.create({
       data: {
         id: uuidv7(),
         tenantId: tenantB.id,
@@ -48,7 +48,7 @@ describe('Address · Row-Level Security (D-012)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenantA.id,
-        customerId: customerA.id,
+        partyId: partyA.id,
         logradouro: 'Rua A',
         bairro: 'Centro',
         municipio: 'São Paulo',
@@ -60,7 +60,7 @@ describe('Address · Row-Level Security (D-012)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenantB.id,
-        customerId: customerB.id,
+        partyId: partyB.id,
         logradouro: 'Rua B',
         bairro: 'Centro',
         municipio: 'Curitiba',
@@ -71,7 +71,7 @@ describe('Address · Row-Level Security (D-012)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Address", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Address", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
@@ -103,7 +103,7 @@ describe('Address · Row-Level Security (D-012)', () => {
         data: {
           id: uuidv7(),
           tenantId: tenantB.id,
-          customerId: customerB.id,
+          partyId: partyB.id,
           logradouro: 'Rua Forjada',
           bairro: 'Centro',
           municipio: 'Curitiba',

@@ -21,7 +21,7 @@ model Tenant {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   users     User[]
   branches  Branch[]
-  customers Customer[]
+  parties   Party[]
   addresses Address[]
   drivers   Driver[]
   vehicles  Vehicle[]
@@ -40,7 +40,7 @@ model Tenant {
   occurrences      Occurrence[]
 }
 
-// Filial é CNPJ, não organograma (D-011). Cadastro (Customer, Driver,
+// Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
 // Vehicle...) não carrega branchId; movimento (Order, Trip, CTe, Invoice...)
 // carrega. Existe agora só pra esses modelos já nascerem com branchId —
 // zero tela, zero filtro, zero permissão por filial no MVP.
@@ -95,11 +95,16 @@ enum PersonType {
   COMPANY
 }
 
-// Cliente é uma parte, não um papel (D-018). Não existem entidades
-// separadas para remetente, destinatário e tomador — o mesmo Customer pode
-// ser os três na mesma carga. Papel é relacionamento dentro do Order,
-// nunca campo aqui. Cadastro é da empresa: sem branchId (D-011).
-model Customer {
+// Uma parte, não um papel (D-018, renomeado de Customer para Party — D-032:
+// a mesma parte pode ser cliente e terceiro contratado, "Customer" passou a
+// mentir). Não existem entidades separadas para remetente, destinatário e
+// tomador — a mesma Party pode ser os três na mesma carga, e a mesma Party
+// pode ainda ser o terceiro contratado numa viagem diferente (CarrierHire).
+// Papel é relacionamento de quem referencia (Order, CarrierHire), nunca
+// campo aqui. Cadastro é da empresa: sem branchId (D-011). Tela continua
+// dizendo "Clientes" e "Transportadores" (D-008) — o nome do model é
+// vocabulário de código, não de tela.
+model Party {
   id         String     @id @db.Uuid
   tenantId   String     @db.Uuid
   tenant     Tenant     @relation(fields: [tenantId], references: [id])
@@ -109,7 +114,8 @@ model Customer {
   // confiar só na aplicação lembrar (mesmo critério de D-012/D-014/D-029).
   // Dígito verificador NÃO é validado aqui: é lógica não trivial, e regra
   // fiscal não se responde de memória (seção 1.6) — só formato (contagem
-  // de dígitos) é garantido no banco.
+  // de dígitos) é garantido no banco. Unicidade por documento dentro do
+  // tenant vem dos dois @@unique abaixo.
   cpf        String?    @db.VarChar(11)
   cnpj       String?    @db.VarChar(14)
   // Inscrição estadual: texto livre, sem formato validado — varia por UF e
@@ -121,13 +127,13 @@ model Customer {
   updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
   addresses  Address[]
   freightRates FreightRate[]
-  // Três relações nomeadas para o mesmo model — um Customer pode ser
+  // Três relações nomeadas para o mesmo model — uma Party pode ser
   // sender numa Order e tomador em outra (D-018).
   ordersAsSender    Order[] @relation("OrderSender")
   ordersAsRecipient Order[] @relation("OrderRecipient")
   ordersAsTomador   Order[] @relation("OrderTomador")
   // Terceiro é uma parte que exerce papel (D-018 aplicado a D-019), não
-  // cadastro próprio — reaproveita Customer (já cobre PF/CPF e PJ/CNPJ,
+  // cadastro próprio — reaproveita Party (já cobre PF/CPF e PJ/CNPJ,
   // exatamente TAC/ETC), papel vive em CarrierHire, não aqui.
   carrierHiresAsThirdParty CarrierHire[] @relation("CarrierHireThirdParty")
 
@@ -136,18 +142,18 @@ model Customer {
   @@index([tenantId, active])
 }
 
-// Entidade própria — um Customer pode ter várias (D-018). Campos em
+// Entidade própria — uma Party pode ter várias (D-018). Campos em
 // português (logradouro, número, bairro, município, UF, CEP): são os
 // nomes do próprio schema de NF-e/CT-e, que D-024 vai precisar mapear —
 // mesmo critério de exceção do D-007 que manteve Tomador/Embarcador.
-// Carrega tenantId e RLS próprios: não basta herdar do Customer via join,
+// Carrega tenantId e RLS próprios: não basta herdar do Party via join,
 // senão uma consulta crua nesta tabela vazaria entre tenants (D-012).
 model Address {
   id          String   @id @db.Uuid
   tenantId    String   @db.Uuid
   tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  customerId  String   @db.Uuid
-  customer    Customer @relation(fields: [customerId], references: [id])
+  partyId     String   @db.Uuid
+  party       Party    @relation(fields: [partyId], references: [id])
   logradouro  String
   numero      String?
   complemento String?
@@ -159,7 +165,7 @@ model Address {
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
   tripsAsDestination Trip[]
 
-  @@index([tenantId, customerId])
+  @@index([tenantId, partyId])
 }
 
 // Vínculo do motorista com a transportadora (D-019, assento reservado — a
@@ -179,7 +185,7 @@ model Driver {
   tenantId       String         @db.Uuid
   tenant         Tenant         @relation(fields: [tenantId], references: [id])
   name           String
-  // Formato básico (contagem de dígitos) no banco, igual Customer — não o
+  // Formato básico (contagem de dígitos) no banco, igual Party — não o
   // dígito verificador (seção 1.6).
   cpf            String         @db.VarChar(11)
   // Número e categoria da CNH ficam texto livre, sem CHECK de formato:
@@ -254,7 +260,7 @@ model Vehicle {
   @@index([tenantId, active])
 }
 
-// Trecho origem-destino para precificação — independente de Customer ou
+// Trecho origem-destino para precificação — independente de Party ou
 // Address (D-018 lista Lane como cadastro próprio, não sub-entidade).
 // Inglês (D-007): city/state são conceitos geográficos genéricos, sem
 // vocabulário fiscal a preservar — diferente de Address, que precisa
@@ -282,18 +288,18 @@ model Lane {
 // Imutabilidade garantida no banco, não por disciplina: o role de
 // aplicação só tem UPDATE liberado em validTo e updatedAt (GRANT por
 // coluna, na migração) — tarifa, valor, e a identidade da linha
-// (tenantId/customerId/laneId/validFrom) nunca podem ser alteradas depois
+// (tenantId/partyId/laneId/validFrom) nunca podem ser alteradas depois
 // de criadas. "Fechar a linha vigente" é o único UPDATE possível.
 //
-// Sobreposição de vigência para o mesmo tenant+customer+lane é bloqueada
+// Sobreposição de vigência para o mesmo tenant+party+lane é bloqueada
 // por EXCLUDE USING gist na migração (btree_gist) — não por validação na
 // aplicação.
 model FreightRate {
   id         String   @id @db.Uuid
   tenantId   String   @db.Uuid
   tenant     Tenant   @relation(fields: [tenantId], references: [id])
-  customerId String   @db.Uuid
-  customer   Customer @relation(fields: [customerId], references: [id])
+  partyId    String   @db.Uuid
+  party      Party    @relation(fields: [partyId], references: [id])
   laneId     String   @db.Uuid
   lane       Lane     @relation(fields: [laneId], references: [id])
   // Data de calendário, não timestamp (D-016) — vigência não tem hora.
@@ -309,7 +315,7 @@ model FreightRate {
   quotes     Quote[]
   orders     Order[]
 
-  @@index([tenantId, customerId, laneId])
+  @@index([tenantId, partyId, laneId])
 }
 
 // Lista de domínio em tabela, não enum (D-020): tenantId nulo = padrão do
@@ -318,7 +324,7 @@ model FreightRate {
 // e escrita liberam tenantId IS NULL OU do próprio tenant — um tenant
 // consegue, em teoria, criar uma linha "global" (tenantId NULL). Aceito
 // deliberadamente: é só um catálogo de status, não dado isolado de outro
-// tenant — diferente de User/Customer/etc., onde isso seria grave.
+// tenant — diferente de User/Party/etc., onde isso seria grave.
 model QuoteStatus {
   id        String   @id @db.Uuid
   tenantId  String?  @db.Uuid
@@ -348,7 +354,7 @@ model Quote {
   tenantId      String      @db.Uuid
   tenant        Tenant      @relation(fields: [tenantId], references: [id])
   // Referência de auditoria à linha de origem (D-014) — não redundante
-  // com customer/lane: ambos são derived via freightRate.
+  // com party/lane: ambos são derived via freightRate.
   freightRateId String      @db.Uuid
   freightRate   FreightRate @relation(fields: [freightRateId], references: [id])
   statusId      String      @db.Uuid
@@ -369,7 +375,7 @@ model Quote {
 }
 
 // Pedido (D-018). branchId obrigatório: movimento é da filial (D-011) —
-// diferente de Quote/FreightRate/Customer, que são cadastro/precificação
+// diferente de Quote/FreightRate/Party, que são cadastro/precificação
 // da empresa.
 //
 // Congela os valores aplicados nos dois caminhos de precificação — via
@@ -377,10 +383,10 @@ model Quote {
 // freightRateId é sempre preenchido (referência de auditoria); quoteId só
 // quando veio de uma cotação.
 //
-// Sender, recipient e tomador são relacionamentos separados com o mesmo
-// Customer — nunca um "tipo" no cadastro (D-018: Customer é uma parte,
-// não um papel). Tomador é campo próprio e obrigatório, nunca inferido
-// dos outros dois.
+// Sender, recipient e tomador são relacionamentos separados com a mesma
+// Party — nunca um "tipo" no cadastro (D-018: Party é uma parte, não um
+// papel). Tomador é campo próprio e obrigatório, nunca inferido dos
+// outros dois.
 //
 // senderId/recipientId em inglês, tomadorId em português (D-007,
 // corrigido 04/09/2026): "remetente"/"destinatário" traduzem sem perda —
@@ -409,11 +415,11 @@ model Order {
   freightRateId  String       @db.Uuid
   freightRate    FreightRate  @relation(fields: [freightRateId], references: [id])
   senderId       String       @db.Uuid
-  sender         Customer     @relation("OrderSender", fields: [senderId], references: [id])
+  sender         Party        @relation("OrderSender", fields: [senderId], references: [id])
   recipientId    String       @db.Uuid
-  recipient      Customer     @relation("OrderRecipient", fields: [recipientId], references: [id])
+  recipient      Party        @relation("OrderRecipient", fields: [recipientId], references: [id])
   tomadorId      String       @db.Uuid
-  tomador        Customer     @relation("OrderTomador", fields: [tomadorId], references: [id])
+  tomador        Party        @relation("OrderTomador", fields: [tomadorId], references: [id])
   // Congelado na criação — cópia, não consulta. Escalas de D-013.
   rate                 Decimal  @db.Decimal(18, 6)
   minimumFreight       Decimal  @db.Decimal(14, 2)
@@ -529,7 +535,7 @@ model Trip {
   updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
   // Contratação de terceiro (D-019) — 1:1, só existe quando a viagem é
   // terceirizada. FK vive em CarrierHire (dependente carrega a
-  // referência), não aqui — mesmo critério de Address -> Customer.
+  // referência), não aqui — mesmo critério de Address -> Party.
   carrierHire        CarrierHire?
   // Eventos da viagem (D-018) — FK vive em Occurrence, não aqui, mesmo
   // critério de CarrierHire.
@@ -567,7 +573,8 @@ enum PaymentEventType {
   REVERSAL
 }
 
-// Contratação da viagem com terceiro (D-019). branchId obrigatório:
+// Contratação da viagem com terceiro (D-019, Party renomeado de Customer
+// pela D-032). branchId obrigatório:
 // movimento é da filial (D-011), mesmo critério de Order/Trip.
 //
 // Só agreedFreight é valor congelado aqui (D-014). Adiantamento e saldo
@@ -591,7 +598,7 @@ model CarrierHire {
   tripId       String   @unique @db.Uuid
   trip         Trip     @relation(fields: [tripId], references: [id])
   thirdPartyId String   @db.Uuid
-  thirdParty   Customer @relation("CarrierHireThirdParty", fields: [thirdPartyId], references: [id])
+  thirdParty   Party    @relation("CarrierHireThirdParty", fields: [thirdPartyId], references: [id])
 
   // Escala de valor final (D-013).
   agreedFreight Decimal @db.Decimal(14, 2)
@@ -631,7 +638,7 @@ model CarrierHire {
 // (CHECK na migração — retenção não é negativa).
 //
 // Sem branchId: é filho de CarrierHire, que já carrega — mesmo critério
-// do Address não duplicar o que o Customer já modela.
+// do Address não duplicar o que o Party já modela.
 //
 // UPDATE e DELETE revogados por inteiro (não GRANT de coluna como
 // FreightRate/Quote/CarrierHire): nenhuma coluna aqui legitimamente

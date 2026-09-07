@@ -12,16 +12,16 @@ const admin = new PrismaClient({
 
 describe('FreightRate · vigência e imutabilidade (D-014)', () => {
   let tenant: { id: string };
-  let customer: { id: string };
+  let party: { id: string };
   let lane: { id: string };
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     tenant = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
     });
-    customer = await admin.customer.create({
+    party = await admin.party.create({
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
@@ -43,18 +43,18 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "FreightRate", "Lane", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
 
-  it('o banco recusa vigências sobrepostas para o mesmo tenant+customer+lane', async () => {
+  it('o banco recusa vigências sobrepostas para o mesmo tenant+party+lane', async () => {
     await forTenant(tenant.id).freightRate.create({
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         validFrom: new Date('2026-01-01'),
         validTo: new Date('2026-07-01'),
@@ -69,7 +69,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
         data: {
           id: uuidv7(),
           tenantId: tenant.id,
-          customerId: customer.id,
+          partyId: party.id,
           laneId: lane.id,
           // Sobrepõe: começa antes do fim da linha anterior (2026-07-01).
           validFrom: new Date('2026-03-01'),
@@ -87,7 +87,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         // daterange(..., '[)'): validTo é exclusivo — vale até 2026-06-30.
         validFrom: new Date('2026-01-01'),
@@ -104,7 +104,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
         data: {
           id: uuidv7(),
           tenantId: tenant.id,
-          customerId: customer.id,
+          partyId: party.id,
           laneId: lane.id,
           validFrom: new Date('2026-07-01'),
           validTo: new Date('2026-12-31'),
@@ -121,7 +121,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         validFrom: new Date('2026-01-01'),
         validTo: new Date('2026-07-01'),
@@ -134,7 +134,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         validFrom: new Date('2026-07-01'),
         validTo: new Date('9999-12-31'), // sentinela: vigente até fechar
@@ -148,7 +148,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
     const applicable = await forTenant(tenant.id).freightRate.findFirst({
       where: {
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         validFrom: { lte: referenceDate },
         validTo: { gt: referenceDate },
@@ -163,7 +163,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         validFrom: new Date('2026-01-01'),
         validTo: new Date('9999-12-31'),
@@ -186,7 +186,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         validFrom: new Date('2026-01-01'),
         validTo: new Date('9999-12-31'),
@@ -209,7 +209,7 @@ describe('FreightRate · vigência e imutabilidade (D-014)', () => {
       data: {
         id: uuidv7(),
         tenantId: tenant.id,
-        customerId: customer.id,
+        partyId: party.id,
         laneId: lane.id,
         validFrom: new Date('2026-01-01'),
         validTo: new Date('9999-12-31'),

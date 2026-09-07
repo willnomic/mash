@@ -33,7 +33,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
   let damageReasonId: string;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     await ensureDeductionReasonsSeeded(admin);
     seed = await seedCarrierHireScenario(admin, 'A', 'transportadora-a');
@@ -53,7 +53,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "CarrierPayment", "CarrierHire", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     await ensureDeductionReasonsSeeded(admin);
     await admin.$disconnect();
@@ -73,7 +73,7 @@ describe('CarrierHire/CarrierPayment · contratação de terceiro (D-019)', () =
     await expect(
       forTenant(seed.tenant.id).carrierHire.update({
         where: { id: hire.id },
-        data: { thirdPartyId: seed.customer.id },
+        data: { thirdPartyId: seed.party.id },
       }),
     ).rejects.toThrow();
   });

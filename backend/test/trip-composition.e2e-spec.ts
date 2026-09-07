@@ -17,7 +17,7 @@ describe('Trip · composição de veículos (D-018)', () => {
   let statusId: string;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     seed = await seedOrderScenario(admin, 'A', 'transportadora-a');
     const status = await admin.tripStatus.findFirstOrThrow({
@@ -27,7 +27,7 @@ describe('Trip · composição de veículos (D-018)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
@@ -129,9 +129,9 @@ describe('Trip · composição de veículos (D-018)', () => {
         tenantId: seed.tenant.id,
         branchId: seed.branch.id,
         freightRateId: seed.freightRate.id,
-        senderId: seed.customer.id,
-        recipientId: seed.customer.id,
-        tomadorId: seed.customer.id,
+        senderId: seed.party.id,
+        recipientId: seed.party.id,
+        tomadorId: seed.party.id,
         rate: '150.5',
         minimumFreight: '500',
         additionalPercentage: '2.5',

@@ -14,7 +14,7 @@ export async function seedOrderScenario(
   const branch = await admin.branch.create({
     data: { id: uuidv7(), tenantId: tenant.id, name: 'Matriz' },
   });
-  const customer = await admin.customer.create({
+  const party = await admin.party.create({
     data: {
       id: uuidv7(),
       tenantId: tenant.id,
@@ -27,7 +27,7 @@ export async function seedOrderScenario(
     data: {
       id: uuidv7(),
       tenantId: tenant.id,
-      customerId: customer.id,
+      partyId: party.id,
       logradouro: 'Rua A',
       bairro: 'Centro',
       municipio: 'Curitiba',
@@ -49,7 +49,7 @@ export async function seedOrderScenario(
     data: {
       id: uuidv7(),
       tenantId: tenant.id,
-      customerId: customer.id,
+      partyId: party.id,
       laneId: lane.id,
       validFrom: new Date('2026-01-01'),
       validTo: new Date('9999-12-31'),
@@ -64,9 +64,9 @@ export async function seedOrderScenario(
       tenantId: tenant.id,
       branchId: branch.id,
       freightRateId: freightRate.id,
-      senderId: customer.id,
-      recipientId: customer.id,
-      tomadorId: customer.id,
+      senderId: party.id,
+      recipientId: party.id,
+      tomadorId: party.id,
       rate: '150.5',
       minimumFreight: '500',
       additionalPercentage: '2.5',
@@ -125,7 +125,7 @@ export async function seedOrderScenario(
   return {
     tenant,
     branch,
-    customer,
+    party,
     address,
     lane,
     freightRate,

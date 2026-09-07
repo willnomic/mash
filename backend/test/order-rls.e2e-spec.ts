@@ -18,7 +18,7 @@ async function seedTenant(name: string, slug: string) {
   const branch = await admin.branch.create({
     data: { id: uuidv7(), tenantId: tenant.id, name: 'Matriz' },
   });
-  const customer = await admin.customer.create({
+  const party = await admin.party.create({
     data: {
       id: uuidv7(),
       tenantId: tenant.id,
@@ -41,7 +41,7 @@ async function seedTenant(name: string, slug: string) {
     data: {
       id: uuidv7(),
       tenantId: tenant.id,
-      customerId: customer.id,
+      partyId: party.id,
       laneId: lane.id,
       validFrom: new Date('2026-01-01'),
       validTo: new Date('9999-12-31'),
@@ -50,7 +50,7 @@ async function seedTenant(name: string, slug: string) {
       additionalPercentage: '2.5',
     },
   });
-  return { tenant, branch, customer, lane, freightRate };
+  return { tenant, branch, party, lane, freightRate };
 }
 
 async function seedOrder(seed: Awaited<ReturnType<typeof seedTenant>>) {
@@ -60,9 +60,9 @@ async function seedOrder(seed: Awaited<ReturnType<typeof seedTenant>>) {
       tenantId: seed.tenant.id,
       branchId: seed.branch.id,
       freightRateId: seed.freightRate.id,
-      senderId: seed.customer.id,
-      recipientId: seed.customer.id,
-      tomadorId: seed.customer.id,
+      senderId: seed.party.id,
+      recipientId: seed.party.id,
+      tomadorId: seed.party.id,
       rate: seed.freightRate.rate,
       minimumFreight: seed.freightRate.minimumFreight,
       additionalPercentage: seed.freightRate.additionalPercentage,
@@ -76,7 +76,7 @@ describe('Order · Row-Level Security (D-012)', () => {
   let b: Awaited<ReturnType<typeof seedTenant>>;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Customer", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     a = await seedTenant('A', 'transportadora-a');
     b = await seedTenant('B', 'transportadora-b');
@@ -85,7 +85,7 @@ describe('Order · Row-Level Security (D-012)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Customer", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
@@ -118,9 +118,9 @@ describe('Order · Row-Level Security (D-012)', () => {
           tenantId: b.tenant.id,
           branchId: b.branch.id,
           freightRateId: b.freightRate.id,
-          senderId: b.customer.id,
-          recipientId: b.customer.id,
-          tomadorId: b.customer.id,
+          senderId: b.party.id,
+          recipientId: b.party.id,
+          tomadorId: b.party.id,
           rate: '1',
           minimumFreight: '1',
           additionalPercentage: '1',

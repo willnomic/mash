@@ -18,13 +18,13 @@ describe('Trip · status interno não vaza para consulta pública (D-010)', () =
   let seed: Awaited<ReturnType<typeof seedOrderScenario>>;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     seed = await seedOrderScenario(admin, 'A', 'transportadora-a');
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureTripStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();

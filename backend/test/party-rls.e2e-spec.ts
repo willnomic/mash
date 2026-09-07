@@ -11,12 +11,12 @@ const admin = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
-describe('Customer · Row-Level Security (D-012)', () => {
+describe('Party · Row-Level Security (D-012)', () => {
   let tenantA: { id: string };
   let tenantB: { id: string };
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Address", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Address", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     tenantA = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
@@ -24,7 +24,7 @@ describe('Customer · Row-Level Security (D-012)', () => {
     tenantB = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora B', slug: 'transportadora-b' },
     });
-    await admin.customer.create({
+    await admin.party.create({
       data: {
         id: uuidv7(),
         tenantId: tenantA.id,
@@ -33,7 +33,7 @@ describe('Customer · Row-Level Security (D-012)', () => {
         cpf: '52998224725',
       },
     });
-    await admin.customer.create({
+    await admin.party.create({
       data: {
         id: uuidv7(),
         tenantId: tenantB.id,
@@ -45,35 +45,35 @@ describe('Customer · Row-Level Security (D-012)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Address", "Customer", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Address", "Party", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
 
   it('não enxerga dado de outro tenant', async () => {
-    const customers = await forTenant(tenantA.id).customer.findMany();
+    const parties = await forTenant(tenantA.id).party.findMany();
 
-    expect(customers).toHaveLength(1);
-    expect(customers[0].tenantId).toBe(tenantA.id);
+    expect(parties).toHaveLength(1);
+    expect(parties[0].tenantId).toBe(tenantA.id);
   });
 
   it('sem tenant definido, não retorna nada', async () => {
-    const customers = await base.customer.findMany();
+    const parties = await base.party.findMany();
 
-    expect(customers).toHaveLength(0);
+    expect(parties).toHaveLength(0);
   });
 
   it('protege também consulta crua', async () => {
     const rows =
-      await forTenant(tenantA.id).$queryRaw`SELECT * FROM "Customer"`;
+      await forTenant(tenantA.id).$queryRaw`SELECT * FROM "Party"`;
 
     expect(rows).toHaveLength(1);
   });
 
   it('impede gravar no tenant alheio', async () => {
     await expect(
-      forTenant(tenantA.id).customer.create({
+      forTenant(tenantA.id).party.create({
         data: {
           id: uuidv7(),
           tenantId: tenantB.id,

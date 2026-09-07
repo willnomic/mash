@@ -34,7 +34,7 @@ describe('Order · tomador é campo próprio, não derivado (D-018)', () => {
     }
   });
 
-  it('tomadorId é uma foreign key própria para Customer, distinta de remetente/destinatário', async () => {
+  it('tomadorId é uma foreign key própria para Party, distinta de remetente/destinatário', async () => {
     const fks = await admin.$queryRaw<
       { column_name: string; foreign_table: string }[]
     >`
@@ -51,9 +51,9 @@ describe('Order · tomador é campo próprio, não derivado (D-018)', () => {
     `;
 
     expect(fks).toHaveLength(3);
-    expect(fks.every((fk) => fk.foreign_table === 'Customer')).toBe(true);
-    // Três FKs distintas para o mesmo Customer — não uma tabela de papel
-    // genérica nem um "tipo" no cadastro do Customer.
+    expect(fks.every((fk) => fk.foreign_table === 'Party')).toBe(true);
+    // Três FKs distintas para a mesma Party — não uma tabela de papel
+    // genérica nem um "tipo" no cadastro da Party.
     const columnNames = fks.map((fk) => fk.column_name).sort();
     expect(columnNames).toEqual([
       'recipientId',

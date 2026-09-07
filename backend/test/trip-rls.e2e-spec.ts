@@ -37,7 +37,7 @@ describe('Trip · Row-Level Security (D-012)', () => {
   let b: Awaited<ReturnType<typeof seedOrderScenario>>;
 
   beforeEach(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await ensureTripStatusesSeeded(admin);
     a = await seedOrderScenario(admin, 'A', 'transportadora-a');
@@ -47,7 +47,7 @@ describe('Trip · Row-Level Security (D-012)', () => {
   });
 
   afterAll(async () => {
-    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Customer", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
+    await admin.$executeRaw`TRUNCATE TABLE "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
     await ensureTripStatusesSeeded(admin);
     await admin.$disconnect();
