@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
+import { ensureOrderStatusesSeeded } from './seed-order-statuses.js';
 
 // Cadeia completa até Order, pra não repetir esse setup em todo teste de
 // Trip/RiskClearance. Cada chamada cria um tenant novo e independente.
@@ -58,6 +59,10 @@ export async function seedOrderScenario(
       additionalPercentage: '2.5',
     },
   });
+  await ensureOrderStatusesSeeded(admin);
+  const inProgressStatus = await admin.orderStatus.findFirstOrThrow({
+    where: { code: 'IN_PROGRESS' },
+  });
   const order = await admin.order.create({
     data: {
       id: uuidv7(),
@@ -67,6 +72,7 @@ export async function seedOrderScenario(
       // válido no escopo tenant+branch. Numeração de verdade (D-015) é
       // testada em order-numbering.e2e-spec.ts, via NumberingService.
       number: 1,
+      statusId: inProgressStatus.id,
       freightRateId: freightRate.id,
       senderId: party.id,
       recipientId: party.id,

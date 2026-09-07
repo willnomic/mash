@@ -4,6 +4,7 @@ import type { ClsService } from 'nestjs-cls';
 import { v7 as uuidv7 } from 'uuid';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
 import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
+import { ensureOrderStatusesSeeded } from './helpers/seed-order-statuses.js';
 import { OrderService } from '../src/order/order.service.js';
 import { NumberingService } from '../src/numbering/numbering.service.js';
 import { TenantPrisma } from '../src/tenant/tenant-prisma.service.js';
@@ -95,11 +96,13 @@ describe('Order · numeração de negócio (D-015)', () => {
   beforeEach(async () => {
     await admin.$executeRawUnsafe(TRUNCATE);
     await ensureQuoteStatusesSeeded(admin);
+    await ensureOrderStatusesSeeded(admin);
   });
 
   afterAll(async () => {
     await admin.$executeRawUnsafe(TRUNCATE);
     await ensureQuoteStatusesSeeded(admin);
+    await ensureOrderStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
@@ -129,6 +132,9 @@ describe('Order · numeração de negócio (D-015)', () => {
 
   it('unicidade do número dentro do escopo tenant+branch é garantida no banco', async () => {
     const seed = await seedTenant('A', 'transportadora-a');
+    const status = await admin.orderStatus.findFirstOrThrow({
+      where: { code: 'IN_PROGRESS' },
+    });
 
     await admin.order.create({
       data: {
@@ -136,6 +142,7 @@ describe('Order · numeração de negócio (D-015)', () => {
         tenantId: seed.tenant.id,
         branchId: seed.branch.id,
         number: 1,
+        statusId: status.id,
         freightRateId: seed.freightRate.id,
         senderId: seed.party.id,
         recipientId: seed.party.id,
@@ -154,6 +161,7 @@ describe('Order · numeração de negócio (D-015)', () => {
           tenantId: seed.tenant.id,
           branchId: seed.branch.id,
           number: 1, // mesmo número, mesmo tenant+branch — recusado pelo banco
+          statusId: status.id,
           freightRateId: seed.freightRate.id,
           senderId: seed.party.id,
           recipientId: seed.party.id,

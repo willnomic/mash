@@ -29,6 +29,7 @@ model Tenant {
   freightRates         FreightRate[]
   quoteStatuses        QuoteStatus[]
   quotes               Quote[]
+  orderStatuses        OrderStatus[]
   orders               Order[]
   documentCounters     DocumentCounter[]
   tripStatuses         TripStatus[]
@@ -420,11 +421,39 @@ model Quote {
 // tabela filha (Trip.orderId) que vai carregar a referência, não o
 // contrário.
 //
-// Sem UPDATE nenhum liberado a mash_app: nada nesta tabela muda
-// legitimamente depois de criada (sem status, sem campo mutável) — mesmo
-// mecanismo de imutabilidade do FreightRate, aplicado ao conjunto vazio
-// de colunas mutáveis. DELETE também revogado (D-017: movimento
-// financeiro nunca se apaga).
+// Lista de domínio em tabela, não enum (D-020) — mesmo padrão do
+// QuoteStatus: tenantId nulo = padrão do sistema, preenchido = status
+// próprio daquele tenant. Achado nº 4 da auditoria de modelo (D-036):
+// Order não tinha como representar "não vale" — diferente de Quote/Trip.
+// Sem isPublic (diferente de TripStatus/OccurrenceType): a distinção
+// interno/público do D-010 hoje mora no status da VIAGEM, não do pedido
+// — nada pede essa taxonomia aqui ainda, não inventada.
+//
+// Evidência de campo (planilha real, D-037/D-038): coluna STATUS com
+// FINALIZADO/ANDAMENTO/CANCELADO em uso — só esses três semeados,
+// não a taxonomia completa.
+model OrderStatus {
+  id        String   @id @db.Uuid
+  tenantId  String?  @db.Uuid
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  code      String
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  orders    Order[]
+
+  @@unique([tenantId, code])
+}
+
+// Sem UPDATE liberado a mash_app além de statusId/updatedAt (D-038): nada
+// mais nesta tabela muda legitimamente depois de criada — mesmo mecanismo
+// de imutabilidade do FreightRate/Quote, aplicado ao conjunto de colunas
+// mutáveis que agora tem exatamente uma (statusId). number, valores
+// congelados e as três Party continuam fora do alcance do UPDATE — status
+// não reabre número de negócio (D-015): DocumentCounter não tem nenhum
+// caminho que reaja a mudança de status, então cancelar não libera o
+// número pra reuso. DELETE também revogado (D-017: movimento financeiro
+// nunca se apaga — "cancelado" é estado, não remoção).
 model Order {
   id                   String      @id @db.Uuid
   tenantId             String      @db.Uuid
@@ -438,6 +467,13 @@ model Order {
   // SEQUENCE, cujo nextval() nunca é desfeito). Único dentro de
   // tenant+branch, garantido no banco.
   number               Int
+  // Referência do cliente (D-038) — é por ESSE número que o operador acha
+  // o pedido o dia inteiro, não pelo number interno da transportadora
+  // (evidência: coluna PROCESSO da planilha, formatos livres por cliente:
+  // "PRA 7497/24", "001-OP-I-6403", "32584/25-IMA"). Opcional: nem todo
+  // cliente manda uma. Busca via índice trigram (ver migração) — formatos
+  // sem prefixo comum, índice btree comum não ajudaria em "contém".
+  customerReference    String?
   quoteId              String?     @db.Uuid
   quote                Quote?      @relation(fields: [quoteId], references: [id])
   freightRateId        String      @db.Uuid
@@ -453,12 +489,17 @@ model Order {
   minimumFreight       Decimal     @db.Decimal(14, 2)
   additionalPercentage Decimal     @db.Decimal(7, 4)
   total                Decimal     @db.Decimal(14, 2)
+  // Único campo que legitimamente muda depois da criação (D-038) — nasce
+  // "em andamento", único UPDATE liberado a mash_app é este + updatedAt.
+  statusId             String      @db.Uuid
+  status               OrderStatus @relation(fields: [statusId], references: [id])
   createdAt            DateTime    @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime    @updatedAt @db.Timestamptz(3)
   trips                Trip[]
 
   @@unique([tenantId, branchId, number])
   @@index([tenantId, branchId])
+  @@index([tenantId, statusId])
 }
 
 // Lista de domínio em tabela, não enum (D-020) — mesmo padrão do

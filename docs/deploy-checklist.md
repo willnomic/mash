@@ -24,6 +24,14 @@ nada aqui foi verificado em produção ainda.
       `prisma migrate deploy` em produção. Se não for permitido, a migração falha no
       meio, com as tabelas anteriores já criadas — não é reversível sem intervenção.
 
+- [ ] **`CREATE EXTENSION pg_trgm` sem superuser.**
+      A migração `20260908050000_add_order_status_and_customer_reference` roda `CREATE
+      EXTENSION IF NOT EXISTS pg_trgm` (índice GIN trigram para busca por
+      `Order.customerReference`, D-038). Mesma categoria de risco já registrada para
+      `btree_gist` acima — `pg_trgm` também costuma ser "trusted" nas plataformas
+      gerenciadas mais comuns, mas isso não foi confirmado contra Railway/Render de
+      verdade. Checar junto com o item do `btree_gist`, na mesma verificação.
+
 - [ ] **Versão do Node exigida pelo `@angular-devkit` (dependência do `@nestjs/cli`).**
       `npm install` no `backend/` emite `EBADENGINE`: `@angular-devkit/core`,
       `@angular-devkit/schematics` e `@angular-devkit/schematics-cli` exigem

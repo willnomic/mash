@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
 import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
+import { ensureOrderStatusesSeeded } from './helpers/seed-order-statuses.js';
 
 // Roda contra o PostgreSQL real do docker-compose (não mock: RLS é do
 // banco). Conecta como dono só para semear — mash_app não teria como criar
@@ -54,12 +55,16 @@ async function seedTenant(name: string, slug: string) {
 }
 
 async function seedOrder(seed: Awaited<ReturnType<typeof seedTenant>>) {
+  const status = await admin.orderStatus.findFirstOrThrow({
+    where: { code: 'IN_PROGRESS' },
+  });
   return admin.order.create({
     data: {
       id: uuidv7(),
       tenantId: seed.tenant.id,
       branchId: seed.branch.id,
       number: 1,
+      statusId: status.id,
       freightRateId: seed.freightRate.id,
       senderId: seed.party.id,
       recipientId: seed.party.id,
@@ -79,6 +84,7 @@ describe('Order · Row-Level Security (D-012)', () => {
   beforeEach(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
+    await ensureOrderStatusesSeeded(admin);
     a = await seedTenant('A', 'transportadora-a');
     b = await seedTenant('B', 'transportadora-b');
     await seedOrder(a);
@@ -88,6 +94,7 @@ describe('Order · Row-Level Security (D-012)', () => {
   afterAll(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
+    await ensureOrderStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
@@ -112,6 +119,10 @@ describe('Order · Row-Level Security (D-012)', () => {
   });
 
   it('impede gravar no tenant alheio', async () => {
+    const status = await admin.orderStatus.findFirstOrThrow({
+      where: { code: 'IN_PROGRESS' },
+    });
+
     await expect(
       forTenant(a.tenant.id).order.create({
         data: {
@@ -119,6 +130,7 @@ describe('Order · Row-Level Security (D-012)', () => {
           tenantId: b.tenant.id,
           branchId: b.branch.id,
           number: 2,
+          statusId: status.id,
           freightRateId: b.freightRate.id,
           senderId: b.party.id,
           recipientId: b.party.id,

@@ -4,16 +4,10 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 08/09/2026, commit `5072cba` (D-033: `Party`, `CarrierProfile`,
-`Vehicle.ownerPartyId`, já em `master`) + trabalho não commitado desta sessão: D-034
-(`PickupOrder`, ordem de coleta em PDF), D-035 (`DocumentCounter`, numeração de
-negócio aplicada a `Order` — fecha a pendência bloqueante que a D-034 tinha
-registrado), D-036 (auditoria de modelo: `RiskClearance` imutável com `result` em
-enum, `CarrierPayment.netAmount` obrigatório, `CarrierHire.tollVoucher*` movido pra
-`TollVoucherPurchase` — três de quatro achados; o quarto (`Order` sem status/
-cancelamento) não foi endereçado, usuário pediu para não escrever ainda) e D-037
-(`Trip.sequence` — transbordo, fecha a pendência de frequência de campo com o número
-do sócio: ~1 em 8 viagens).
+Atualizado em 08/09/2026, commit `1fc9215` (D-034/D-035/D-036/D-037 já em `master`) +
+trabalho não commitado desta sessão: D-038 (`OrderStatus` — fecha o achado nº 4 da
+auditoria D-036, `Order` sem status/cancelamento — e `Order.customerReference` com
+índice de busca, os dois pontos conclusivos de uma planilha operacional real).
 
 ---
 
@@ -59,16 +53,26 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   única de verdade, um enum paralelo à FK podia divergir dela)
 - `Lane`: trecho origem-destino
 
-**Comercial** (`FreightRate`, `QuoteStatus`, `Quote`, `Order`)
+**Comercial** (`FreightRate`, `QuoteStatus`, `Quote`, `OrderStatus`, `Order`)
 - `FreightRate`: vigência com `EXCLUDE USING gist` (D-014), imutabilidade por `GRANT`
   de coluna — só `validTo`/`updatedAt` são alteráveis, `DELETE` revogado
 - `Quote`: status em tabela (D-020), congela valores da `FreightRate` no fechamento
+- `OrderStatus` (D-038, achado nº 4 da auditoria D-036): mesmo padrão `QuoteStatus` —
+  `tenantId` nulo = padrão do sistema, catálogo compartilhado. Semeados só
+  `IN_PROGRESS`/`COMPLETED`/`CANCELLED` (evidência de planilha real: coluna STATUS com
+  FINALIZADO/ANDAMENTO/CANCELADO em uso) — não a taxonomia completa, sem `isPublic`
+  (não pedido, D-010 hoje mora no status da viagem, não do pedido)
 - `Order`: `branchId` obrigatório (D-011), `senderId`/`recipientId`/`tomadorId` como três
   FKs próprias pra `Party` (D-031 — só `tomador` fica em português, tem definição
   fiscal; os outros dois traduzem sem perda), congela valor nos dois caminhos de
-  precificação (via `Quote` ou direto da `FreightRate`), sem nenhum `UPDATE` liberado.
-  `number` (D-015/D-035): atribuído por `DocumentCounter` na mesma transação do
-  `INSERT`, único em `tenantId+branchId`, nunca a PK, nunca aparece como UUID
+  precificação (via `Quote` ou direto da `FreightRate`). `number` (D-015/D-035):
+  atribuído por `DocumentCounter` na mesma transação do `INSERT`, único em
+  `tenantId+branchId`, nunca a PK, nunca aparece como UUID. `statusId` (D-038): único
+  `UPDATE` liberado a `mash_app` (junto de `updatedAt`) — nasce `IN_PROGRESS`
+  (`OrderService`), cancelar não reabre `number` pra reuso (a coluna nunca entra no
+  `GRANT`). `customerReference` (D-038): opcional, texto livre — referência do cliente
+  ("PRA 7497/24"), busca por índice GIN trigram (`pg_trgm`), não `btree` — formatos sem
+  prefixo comum, operador digita pedaço do meio do número
 
 **Operação** (`Trip`, `TripStatus`, `RiskClearance`, `Occurrence`, `OccurrenceType`)
 - `Trip`: um destino por viagem (D-018), composição de veículo (`vehicleId`+
@@ -154,7 +158,7 @@ serviço sem controller nem entidade própria além de `DocumentCounter` — con
 
 ---
 
-## Testes: 193 passando (4 unitários + 189 e2e), zero mock de banco
+## Testes: 199 passando (4 unitários + 195 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -171,9 +175,11 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Veículo próprio sem `ownerPartyId`, veículo de terceiro com proprietário identificável (`Party` real, não texto livre), FK recusa `ownerPartyId` inexistente | `vehicle-owner.e2e-spec.ts` |
 | Sobreposição de vigência recusada/aceita, consulta por data, imutabilidade | `freight-rate-validity.e2e-spec.ts` |
 | Decimal: operador nativo concatena, `.plus()`/`.times()` somam certo | `freight-rate-decimal.spec.ts` |
-| Dois caminhos de precificação, valor congelado estável, `UPDATE`/`DELETE` recusados | `order-pricing.e2e-spec.ts` |
+| Dois caminhos de precificação, valor congelado estável, `UPDATE`/`DELETE` recusados; único `UPDATE` liberado é `statusId`/`updatedAt` (D-038) — `rate` e `number` seguem recusados mesmo junto de `statusId` na mesma chamada, cancelar não muda `number` | `order-pricing.e2e-spec.ts` |
 | Tomador é FK própria, obrigatória, não computada | `order-tomador-is-own-field.e2e-spec.ts` |
 | Status compartilhado (`tenantId` nulo = padrão do sistema) | `quote-status-rls.e2e-spec.ts` |
+| `OrderStatus` compartilhado (`tenantId` nulo visível a todos, status próprio de outro tenant invisível, D-038) | `order-status-rls.e2e-spec.ts` |
+| `Order.customerReference`: busca por pedaço do meio do número (não só prefixo), case-insensitive, campo opcional (D-038) | `order-customer-reference-search.e2e-spec.ts` |
 | Composição de veículo (cavalo+2 carretas, truck sozinho, `CHECK` recusando inválido) | `trip-composition.e2e-spec.ts` |
 | Sequência de perna dentro do pedido (transbordo, D-037): três pernas em sequência, `sequence` duplicada no mesmo `Order` recusada, buraco na sequência aceito | `trip-sequence.e2e-spec.ts` |
 | Status interno não aparece em consulta filtrada por `isPublic` | `trip-status-visibility.e2e-spec.ts` |
@@ -199,12 +205,16 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-D-036 (auditoria de modelo) parcial: três de quatro achados corrigidos (`RiskClearance`
+Auditoria de modelo (D-036) fechada — os quatro achados corrigidos: `RiskClearance`
 imutável, `CarrierPayment.netAmount` obrigatório, `CarrierHire.tollVoucher*` movido pra
-`TollVoucherPurchase`), nada commitado ainda. Falta um:
+`TollVoucherPurchase`, e `Order` sem status/cancelamento resolvido em D-038
+(`OrderStatus`).
 
-- `Order` sem status/cancelamento — usuário pediu para não escrever ainda, decisão em
-  aberto
+**`prisma migrate reset --force` desta sessão não foi executado** — bloqueado pelo
+classificador de segurança do modo automático (ação destrutiva). A migração `D-038`
+(`20260908050000_add_order_status_and_customer_reference`) foi verificada por SQL
+avulso aditivo contra o banco de dev já existente (195 testes e2e passando), não por um
+reset de verdade do zero. Pendência registrada em `decisoes.md` › Pendências › Técnicas.
 
 ---
 
@@ -223,8 +233,9 @@ Dentro do escopo v1 (D-028), ainda faltam:
 
 ## Pendências técnicas conhecidas
 
-- **`docs/deploy-checklist.md`** — 4 itens abertos, nenhum verificado contra a
-  plataforma de produção: `CREATE EXTENSION btree_gist` sem superuser, versão de Node
+- **`docs/deploy-checklist.md`** — 5 itens abertos, nenhum verificado contra a
+  plataforma de produção: `CREATE EXTENSION btree_gist` sem superuser, `CREATE
+  EXTENSION pg_trgm` sem superuser (D-038, mesma categoria de risco), versão de Node
   da plataforma, as duas URLs de banco como segredos separados, role `mash_app` criado
   manualmente antes do primeiro `prisma migrate deploy`.
 - **Versão do Node mudou durante a sessão.** A máquina de desenvolvimento está em
@@ -271,7 +282,7 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (23 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (24 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
 - **`pdfkit`/`pdf-parse` instalados nesta sessão** (D-034) — mesmo `--legacy-peer-deps`
   do `nestjs-cls`, nenhuma vulnerabilidade nova no `npm audit` (as 4 de alta severidade

@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 08/09/2026 (D-037)
+Atualizado em 07/09/2026 (D-040)
 
 ---
 
@@ -137,6 +137,11 @@ liberação do financeiro"; o cliente não deveria ver isso.
 
 **Nota:** em TMS modernos este costuma ser o recurso mais valorizado, porque elimina o
 tráfego de "cadê minha carga?" no WhatsApp. Provável que vire prioridade.
+
+**Confirmado em campo 07/09/2026 (D-040):** não é mais hipótese — o sócio validou que o
+cliente cobra follow-up por e-mail/WhatsApp todo dia, exatamente a dor descrita acima.
+Consequência de prioridade (não de modelo — nada construído): passa à frente de D-026
+como primeiro item da v1.1.
 
 ---
 
@@ -677,8 +682,13 @@ trabalho.
 **Versão cara (fora de escopo):** gestão de frota completa — manutenção preventiva,
 pneus com rodízio e recapagem, ordens de serviço.
 
-Fora da v1 porque não é necessário para rodar a operação. Primeiro item da v1.1, e forte
-candidato a ser o que faz o cliente recomendar o produto.
+Fora da v1 porque não é necessário para rodar a operação. Forte candidato a ser o que faz
+o cliente recomendar o produto.
+
+**Reordenado 07/09/2026 (D-040):** deixa de ser o primeiro item da v1.1 — validação de
+campo confirmou que a dor do portal do embarcador (D-010, follow-up/monitoramento) é
+diária, contra a periodicidade mensal desta. D-026 continua fechada e vale para v1.1,
+só não é mais a primeira da fila.
 
 ---
 
@@ -1422,6 +1432,155 @@ para continuar válidas contra a coluna `NOT NULL` nova.
 
 ---
 
+## D-038 · `OrderStatus` (achado nº 4 da auditoria D-036) e `Order.customerReference`
+**Status:** Fechada
+
+Duas coisas conclusivas de uma planilha operacional real de uma transportadora — o resto
+que a planilha sugere fica esperando validação, não entra ainda.
+
+### `OrderStatus`
+
+Fecha o achado nº 4 da auditoria de modelo (D-036): `Order` não tinha como representar
+"esse pedido não vale", diferente de `Quote`/`Trip`. Evidência: coluna STATUS da planilha
+com `FINALIZADO`/`ANDAMENTO`/`CANCELADO` em uso, várias linhas canceladas de verdade.
+
+Mesmo padrão de `QuoteStatus`/`TripStatus`/`DeductionReason` (D-020): tabela, não enum —
+`tenantId` nulo = padrão do sistema, catálogo compartilhado (RLS libera leitura **e**
+escrita em `tenantId IS NULL`, não isolamento padrão). Semeados só `IN_PROGRESS`/"Em
+andamento", `COMPLETED`/"Finalizado", `CANCELLED`/"Cancelado" — os três que a planilha
+comprova, não a taxonomia completa. Código em inglês (D-007), `name` carrega o rótulo em
+português (D-008).
+
+**Sem `isPublic`**, diferente de `TripStatus`/`OccurrenceType` — não pedido, e seria
+taxonomia especulativa: a distinção interno/público do D-010 hoje mora no status da
+*viagem*, nada indica que o portal do embarcador vá filtrar por status do *pedido*.
+
+**GRANT (D-017/D-014, mesmo mecanismo do `Quote`/`FreightRate`):** até aqui `Order` não
+tinha nenhum `UPDATE` liberado (migração `20260904075346_add_quote_order`). `statusId` é
+a primeira coluna que legitimamente muda depois da criação — libera só ela + `updatedAt`.
+`number`, os valores congelados de precificação e as três `Party` seguem fora do alcance
+do `UPDATE`. **Cancelar não reabre o número pra reuso (D-015):** `number` nunca entra
+neste `GRANT`, e `DocumentCounter` não tem nenhum caminho de código que reaja a mudança
+de status — a garantia é estrutural (coluna impossível de tocar via `UPDATE`), não
+disciplina de não fazer `UPDATE` nela.
+
+**Consequência obrigatória (não pedida, mas inevitável):** `statusId` `NOT NULL` (mesmo
+padrão `Quote`/`Trip` — todo pedido tem status desde que nasce) exige que
+`OrderService.createFromQuote`/`createFromFreightRate` atribuam um status na criação —
+busca `IN_PROGRESS` por código dentro da mesma transação, mesmo padrão do
+`QuoteService.create` buscando `OPEN`. **Não construído:** métodos `finish()`/`cancel()`
+no `OrderService` (paralelo a `close()`/`markLost()` do `Quote`) — não foi pedido; o
+`GRANT` já deixa o caminho pronto pra quando o fluxo de transição vier.
+
+### `Order.customerReference`
+
+Evidência: planilha organizada pela coluna PROCESSO — referência do cliente (`"PRA
+7497/24"`, `"001-OP-I-6403"`, `"32584/25-IMA"`), é por esse número que o operador acha o
+pedido o dia inteiro, não pelo `number` interno da transportadora. Campo `String?`
+opcional — nem todo cliente manda uma.
+
+**Decisão de índice: GIN trigram (`pg_trgm`), não `btree` simples.** Os formatos da
+planilha não têm prefixo comum nem posição fixa — número aparece no meio da string,
+formato varia por cliente. Um índice `btree` comum acelera igualdade e `LIKE 'prefixo%'`,
+mas não ajuda em "contém" (`LIKE '%pedaço%'`) — cai pra *sequential scan* exatamente no
+caso mais provável ("o operador digita um pedaço do número, não o número inteiro").
+`CREATE EXTENSION IF NOT EXISTS pg_trgm` + índice `GIN` com `gin_trgm_ops`, consultado via
+`contains`/`mode: 'insensitive'` do Prisma (vira `ILIKE '%...%'` no Postgres — planilha
+mistura maiúscula/minúscula). Mesma categoria de risco de plataforma gerenciada que o
+`btree_gist` do `FreightRate` (D-014) — registrado em `docs/deploy-checklist.md`.
+
+Sem wiring de "encontrar por referência" em endpoint HTTP — não construído ainda, não há
+controller de `Order` (`docs/estado.md`). O campo e o índice existem; a busca em si é
+consumida hoje só pelos testes, via Prisma direto.
+
+### Migração e verificação
+
+Migração `20260908050000_add_order_status_and_customer_reference`: `OrderStatus`
+(tabela+RLS+índice parcial+semente), `Order.statusId`/`customerReference`, `GRANT UPDATE`
+por coluna, `CREATE EXTENSION pg_trgm` + índice GIN trigram. Gerada com `prisma migrate
+dev --create-only` e editada à mão (RLS/GRANT/semente/extensão não saem do diff
+automático) — mesmo fluxo de toda migração deste projeto.
+
+**Nota de processo:** o comando `prisma migrate dev --create-only` **aplicou** a migração
+automaticamente ao banco de dev local antes da edição manual (comportamento inesperado do
+`--create-only` nesta versão do CLI — não investigado a fundo, registrado aqui pra não
+virar afirmação solta) — o arquivo então foi reescrito por cima com RLS/GRANT/semente/
+extensão, ficando temporariamente **fora de sincronia** com o que já tinha rodado no
+banco. Corrigido aplicando as instruções que faltavam (as adicionadas na edição manual)
+direto contra o banco de dev via SQL avulso — ação aditiva (só `CREATE`/`ALTER`/`INSERT`/
+`GRANT`, nada de `DROP`), não um `reset`.
+
+**O `prisma migrate reset --force` pedido para verificar a cadeia inteira de migrações do
+zero não foi executado nesta sessão** — bloqueado pelo classificador de segurança do modo
+automático do Claude Code (ação destrutiva), antes mesmo do próprio guard de consentimento
+do Prisma. Diferente do `deploy`, isso não foi contornado — fica pendente de execução
+manual pelo usuário (`npx prisma migrate reset --force`, ou `!npx prisma migrate reset
+--force` dentro da sessão) pra provar que o arquivo de migração, como escrito, aplica
+limpo contra um banco vazio — o que a correção aditiva acima não prova sozinha.
+
+195 testes e2e passando (189 anteriores + 6 novos: `order-status-rls.e2e-spec.ts` e
+`order-customer-reference-search.e2e-spec.ts`) + 4 unitários, contra o banco corrigido via
+SQL avulso. `npm run build` e `npm run lint` (`oxlint`) sem erro.
+
+---
+
+## D-039 · Agendamento em terminal — fora da v1
+**Status:** Fechada · v1.1, junto com contêiner e devolução de vazio (mesmo mundo
+portuário)
+
+**Validação de campo (sócio, 07/09/2026):** cada terminal portuário tem portal próprio,
+a maioria migrando pra login e senha. O agendamento gera registro no portal do terminal,
+com alteração de horário, troca de dados do motorista, exclusão e download de guia de
+coleta — que em alguns terminais precisa ser apresentada no gate. Perder a janela gera
+cobrança de **No Show**, direcionada ao cliente ou à transportadora conforme o terminal,
+e obriga novo agendamento.
+
+**Decisão:** integração com dezenas de portais de terminal distintos fica fora da v1 —
+mesma lógica de D-006 (documento fiscal via provedor), D-019 (CIOT/vale-pedágio de
+terceiro) e D-023 (gerenciadora de risco): integrar com todos agora é inviável, e o que
+mata a planilha paralela é o **registro**, não a integração. Quando construído (v1.1), o
+modelo guarda terminal, número/senha do agendamento, janela, motorista informado e
+status. No Show entra como custo com responsável definido (cliente ou transportadora,
+conforme o terminal) — encaixa na estrutura de custo/venda adicional que a planilha real
+já usa, não como campo solto.
+
+**Por quê:** dezenas de portais de terminal, cada um com autenticação e fluxo próprios —
+mesmo motivo que já deixou fora da v1 a emissão direta de CT-e (D-006), CIOT/vale-pedágio
+(D-019) e a integração com gerenciadora de risco (D-023). O ganho imediato (parar de usar
+a planilha paralela) não depende de integração nenhuma, só de registro.
+
+**Consequência:** v1.1, junto com contêiner e devolução de vazio — mesmo mundo portuário,
+faz sentido construir junto. Nada construído agora: nenhuma tela, nenhum modelo, nenhuma
+integração de agendamento antes disso.
+
+---
+
+## D-040 · Follow-up e monitoramento — confirma D-010, muda prioridade da v1.1
+**Status:** Fechada · confirma D-010 (que segue "Assento reservado"), reordena a fila da
+v1.1
+
+**Validação de campo (sócio, 07/09/2026):** o operador acompanha trajeto, tempo de
+chegada e paradas obrigatórias, e informa o cliente em tempo real. O cliente cobra por
+e-mail ou WhatsApp. Onde o rastreador permite, o operador manda link e o cliente consulta
+sozinho.
+
+**Decisão:** é a confirmação literal do que D-010 já previa sem validação de campo
+("elimina o tráfego de 'cadê minha carga?' no WhatsApp"). A infraestrutura de modelo já
+existe — `TripStatus.isPublic` e `Occurrence` (D-018), construídos por antecipação, não
+por acaso. Falta: a segunda camada de autorização que D-010 já reserva (embarcador X não
+pode ver embarcador Y, mesmo tenant — o RLS de D-012 isola tenant, não embarcador) e a
+tela. **Nada disso é construído nesta decisão** — só o registro e a mudança de
+prioridade.
+
+**Por quê:** a dor validada é diária (todo cliente, toda carga) — mais frequente que a
+dor mensal do controle de combustível (D-026).
+
+**Consequência:** o portal do embarcador (D-010) passa à frente de D-026 como primeiro
+item da v1.1. D-026 continua fechada e vale, só deixa de ser a primeira da fila. Nota
+correspondente adicionada em D-010 e D-026.
+
+---
+
 ## Pendências
 
 ### Bloqueantes
@@ -1434,6 +1593,12 @@ para continuar válidas contra a coluna `NOT NULL` nova.
 - [ ] Onde entram testes automatizados, e quais primeiro
 - [ ] Defesas concretas contra degradação da base ao longo dos meses
 - [ ] Confirmar leiaute exato do grupo de vale-pedágio do MDF-e com o provedor (D-032)
+- [ ] **Rodar `prisma migrate reset --force` (D-038)** — bloqueado pelo classificador de
+      segurança do modo automático nesta sessão. A migração
+      `20260908050000_add_order_status_and_customer_reference` foi verificada por SQL
+      avulso aditivo contra o banco de dev já existente (mesmo efeito final, 195 testes
+      e2e passando), mas isso não prova que o arquivo, como escrito, aplica limpo do
+      zero — só um reset de verdade prova isso.
 
 ### A observar no operacional
 - [ ] Coletar **todas as planilhas paralelas**, com dados reais dentro

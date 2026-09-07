@@ -3,11 +3,17 @@ import { v7 as uuidv7 } from 'uuid';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 import { NumberingService } from '../numbering/numbering.service.js';
 
+const ORDER_STATUS_IN_PROGRESS = 'IN_PROGRESS';
+
 interface OrderParties {
   branchId: string;
   senderId: string;
   recipientId: string;
   tomadorId: string;
+  // Referência do cliente (D-038) — opcional, é por ela que o operador
+  // acha o pedido, não pelo number interno. Sem motor de busca aqui;
+  // quem chama já traz o valor pronto.
+  customerReference?: string;
 }
 
 @Injectable()
@@ -37,6 +43,11 @@ export class OrderService {
         branchId: input.branchId,
         documentType: 'ORDER',
       });
+      // Todo pedido nasce "em andamento" (D-038) — mesmo padrão do
+      // QuoteService.create buscando o status "aberta" por código.
+      const status = await tx.orderStatus.findFirstOrThrow({
+        where: { code: ORDER_STATUS_IN_PROGRESS },
+      });
 
       return tx.order.create({
         data: {
@@ -44,6 +55,8 @@ export class OrderService {
           tenantId: quote.tenantId,
           branchId: input.branchId,
           number,
+          customerReference: input.customerReference,
+          statusId: status.id,
           quoteId: quote.id,
           freightRateId: quote.freightRateId,
           senderId: input.senderId,
@@ -75,6 +88,9 @@ export class OrderService {
         branchId: input.branchId,
         documentType: 'ORDER',
       });
+      const status = await tx.orderStatus.findFirstOrThrow({
+        where: { code: ORDER_STATUS_IN_PROGRESS },
+      });
 
       return tx.order.create({
         data: {
@@ -82,6 +98,8 @@ export class OrderService {
           tenantId: freightRate.tenantId,
           branchId: input.branchId,
           number,
+          customerReference: input.customerReference,
+          statusId: status.id,
           quoteId: null,
           freightRateId: freightRate.id,
           senderId: input.senderId,

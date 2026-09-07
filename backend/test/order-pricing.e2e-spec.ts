@@ -4,6 +4,7 @@ import type { ClsService } from 'nestjs-cls';
 import { v7 as uuidv7 } from 'uuid';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
 import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
+import { ensureOrderStatusesSeeded } from './helpers/seed-order-statuses.js';
 import { OrderService } from '../src/order/order.service.js';
 import { QuoteService } from '../src/quote/quote.service.js';
 import { TenantPrisma } from '../src/tenant/tenant-prisma.service.js';
@@ -60,6 +61,7 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
   beforeEach(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
+    await ensureOrderStatusesSeeded(admin);
     seed = await seedTenant('A', 'transportadora-a');
     const tenantPrisma = tenantPrismaFor(seed.tenant.id);
     quoteService = new QuoteService(tenantPrisma);
@@ -69,6 +71,7 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
   afterAll(async () => {
     await admin.$executeRaw`TRUNCATE TABLE "Order", "Quote", "FreightRate", "Lane", "Party", "Branch", "Tenant" CASCADE`;
     await ensureQuoteStatusesSeeded(admin);
+    await ensureOrderStatusesSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
@@ -157,7 +160,7 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     expect(orderAfter.rate.toString()).toBe('100');
   });
 
-  it('impede alterar valor congelado do Order (nenhum UPDATE é liberado)', async () => {
+  it('impede alterar valor congelado do Order (D-038: só statusId/updatedAt são liberados, rate segue fora)', async () => {
     const freightRate = await createFreightRate('100', '2026-01-01', '9999-12-31');
     const order = await orderService.createFromFreightRate({
       freightRateId: freightRate.id,
@@ -174,6 +177,27 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
         data: { rate: '999' },
       }),
     ).rejects.toThrow();
+
+    // number tampouco — cancelar não reabre o número pra reuso (D-015):
+    // a coluna nunca entra no GRANT, tentar tocá-la falha mesmo junto de
+    // uma coluna liberada.
+    const cancelledStatus = await admin.orderStatus.findFirstOrThrow({
+      where: { code: 'CANCELLED' },
+    });
+    await expect(
+      forTenant(seed.tenant.id).order.update({
+        where: { id: order.id },
+        data: { statusId: cancelledStatus.id, number: 999 },
+      }),
+    ).rejects.toThrow();
+
+    // status sozinho, sem tocar number, é o único UPDATE legítimo.
+    const cancelled = await forTenant(seed.tenant.id).order.update({
+      where: { id: order.id },
+      data: { statusId: cancelledStatus.id },
+    });
+    expect(cancelled.statusId).toBe(cancelledStatus.id);
+    expect(cancelled.number).toBe(order.number);
   });
 
   it('impede apagar Order — movimento financeiro nunca se apaga (D-017)', async () => {
