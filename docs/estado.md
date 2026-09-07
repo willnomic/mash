@@ -4,7 +4,8 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 04/09/2026, commit `be7e7f3`.
+Atualizado em 06/09/2026, commit `d9a3eee` + trabalho não commitado desta sessão
+(correção `reversesPaymentId` do D-032 e `Occurrence`/`OccurrenceType` do D-018).
 
 ---
 
@@ -37,13 +38,26 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   fiscal; os outros dois traduzem sem perda), congela valor nos dois caminhos de
   precificação (via `Quote` ou direto da `FreightRate`), sem nenhum `UPDATE` liberado
 
-**Operação** (`Trip`, `TripStatus`, `RiskClearance`)
+**Operação** (`Trip`, `TripStatus`, `RiskClearance`, `Occurrence`, `OccurrenceType`)
 - `Trip`: um destino por viagem (D-018), composição de veículo (`vehicleId`+
   `trailer1Id`+`trailer2Id`) pertence à viagem, não ao cadastro
 - `TripStatus`: interno/público (`isPublic`, D-010) — só os dois status necessários pra
   provar a distinção estão semeados, não a taxonomia completa
 - `RiskClearance`: ficha de liberação (D-023), só registro, sem integração com
   gerenciadora; `DELETE` revogado (é evidência de conformidade)
+- `Occurrence`/`OccurrenceType`: evento da viagem, pendurado em `Trip`; `branchId`
+  obrigatório (movimento, D-011). `OccurrenceType` em tabela, não enum (D-020) — mesmo
+  padrão `QuoteStatus`/`TripStatus`/`DeductionReason`. `isPublic` mora no tipo, não na
+  ocorrência — espelha `TripStatus` (D-010): é o tipo que decide visibilidade, não a
+  instância, senão duas ocorrências do mesmo tipo poderiam divergir por decisão de
+  quem registrou. Semeados só `DELAY`/"Atraso" (público) e `COMMERCIAL_HOLD`/"Retenção
+  comercial" (interno) — prova a distinção, não a taxonomia completa. Dois timestamps
+  obrigatórios: `occurredAt` (fato na estrada) e `createdAt` (registro no sistema) —
+  `CHECK occurredAt <= createdAt` no banco. `DELETE` revogado (alimenta o cliente pela
+  D-010, apagar é pior que não ter); `UPDATE` liberado só em `description`+`updatedAt`
+  (`GRANT` de coluna, mesmo mecanismo do `CarrierHire`) — tipo, viagem, filial e
+  `occurredAt` congelam. Fora de escopo, não construído: ocorrência mudando status da
+  viagem, anexo/foto
 
 **Terceiro** (`CarrierHire`, `CarrierPayment`, `DeductionReason`, D-019)
 - Terceiro não é cadastro próprio — reaproveita `Customer` (D-018 aplicado: é uma parte
@@ -57,10 +71,19 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
 - `CarrierPayment`: livro de eventos append-only (`ADVANCE`/`BALANCE`/`DEDUCTION`/
   `REVERSAL`, valor sempre positivo, sinal vem do `type`) — saldo nunca é coluna, é
   `SUM` dos eventos; `UPDATE`/`DELETE` revogados por inteiro (correção é `REVERSAL`,
-  linha nova); `CHECK` amarra `deductionReasonId` a `type = DEDUCTION`
+  linha nova); `CHECK` amarra `deductionReasonId` a `type = DEDUCTION`; `REVERSAL`
+  amarrado a `reversesPaymentId` (mesmo mecanismo, índice único parcial impede estornar
+  o mesmo pagamento duas vezes); `netAmount <= grossAmount`
 - `DeductionReason`: motivo do desconto em tabela, não enum (D-020) — mesmo padrão
   `QuoteStatus`/`TripStatus`; semeados `DAMAGE`/`DETENTION`/`FINE`/`FUEL`
-- Decisão registrada em `decisoes.md` (D-032)
+- Decisão registrada em `decisoes.md` (D-032). **Dívida registrada, não corrigida:**
+  `Customer` deveria se chamar `Party` (representa cliente e terceiro); faltam RNTRC,
+  categoria ANTT (TAC/ETC/CTC) e vínculo agregado-vs-spot — vão morar em
+  `CarrierProfile` quando existir (D-032)
+- `CarrierPayment.reversesPaymentId`: correção do D-032 amarrando `REVERSAL` ao
+  pagamento que desfaz (`CHECK` nos dois sentidos + índice único parcial contra
+  estorno duplicado) — commit `d9a3eee` não tem essa coluna, aplicada em migração
+  separada (`20260905001110_carrier_payment_reversal_link`) ainda não commitada
 
 **Endpoints HTTP hoje:** só três — `GET /` (público), `POST /auth/login` (público),
 `GET /me/users` (protegido, exemplo mínimo de wiring). `Quote`/`Order`/`Trip` têm
@@ -68,7 +91,7 @@ serviço (`QuoteService`, `OrderService`) mas nenhum controller.
 
 ---
 
-## Testes: 118 passando (4 unitários + 114 e2e), zero mock de banco
+## Testes: 134 passando (4 unitários + 130 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -89,7 +112,10 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Composição de veículo (cavalo+2 carretas, truck sozinho, `CHECK` recusando inválido) | `trip-composition.e2e-spec.ts` |
 | Status interno não aparece em consulta filtrada por `isPublic` | `trip-status-visibility.e2e-spec.ts` |
 | Contratação congela `agreedFreight`, libera só CIOT/vale-pedágio, `DELETE` recusado | `carrier-hire-ledger.e2e-spec.ts` |
-| Livro de pagamento append-only, `CHECK` motivo↔`DEDUCTION`, saldo por soma de eventos, estorno, vale-pedágio não entra na conta | `carrier-hire-ledger.e2e-spec.ts` |
+| Livro de pagamento append-only, `CHECK` motivo↔`DEDUCTION`, saldo por soma de eventos, vale-pedágio não entra na conta | `carrier-hire-ledger.e2e-spec.ts` |
+| Estorno amarrado a `reversesPaymentId` (`CHECK`, sem duplo estorno), `netAmount <= grossAmount` | `carrier-hire-ledger.e2e-spec.ts` |
+| `OccurrenceType` compartilhado (`tenantId` nulo visível a todos) | `occurrence-type-rls.e2e-spec.ts` |
+| RLS de `Occurrence`, `CHECK occurredAt<=createdAt`, `UPDATE` restrito a `description`, `DELETE` recusado, tipo interno não aparece em consulta filtrada por `isPublic` | `occurrence.e2e-spec.ts` |
 
 Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
@@ -97,8 +123,10 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-Nada no momento — última unidade concluída foi `CarrierHire`/`CarrierPayment`/
-`DeductionReason` (D-019, ainda não commitada nesta sessão).
+Nada no momento — última unidade concluída foi `Occurrence`/`OccurrenceType` (D-018),
+ainda não commitada nesta sessão. Também não commitada: a correção
+`reversesPaymentId` do D-032 (`CarrierPayment`), que já estava no working tree quando
+esta sessão começou.
 
 ---
 
@@ -107,7 +135,6 @@ Nada no momento — última unidade concluída foi `CarrierHire`/`CarrierPayment
 Dentro do escopo v1 (D-028), ainda faltam:
 
 - Ordem de coleta em PDF (D-027)
-- Ocorrência da viagem (`Occurrence`, mencionada em D-018 mas não construída)
 - CT-e e MDF-e — emissão via provedor (D-006), importação de XML de NF-e (D-024)
 - Averbação (D-023) — depende de saber se a AT&M tem API (pendência bloqueante em
   `decisoes.md`)
