@@ -38,6 +38,7 @@ model Tenant {
   carrierPayments  CarrierPayment[]
   occurrenceTypes  OccurrenceType[]
   occurrences      Occurrence[]
+  carrierProfiles  CarrierProfile[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
@@ -136,6 +137,9 @@ model Party {
   // cadastro próprio — reaproveita Party (já cobre PF/CPF e PJ/CNPJ,
   // exatamente TAC/ETC), papel vive em CarrierHire, não aqui.
   carrierHiresAsThirdParty CarrierHire[] @relation("CarrierHireThirdParty")
+  // Existência opcional (D-032): é o que torna a Party um transportador
+  // contratável, não um campo a mais no cadastro do cliente.
+  carrierProfile CarrierProfile?
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnpj])
@@ -680,6 +684,56 @@ model CarrierPayment {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([tenantId, carrierHireId])
+}
+
+// Categoria ANTT do transportador — fixo por regulação do setor, não varia
+// por tenant (D-020, mesma exceção de VehicleType/UserRole). CTC
+// (Cooperativa de Transporte de Cargas) é PJ mas não é ETC — personType
+// (PF/PJ) da Party não substitui esta classificação (D-032).
+enum AnttCategory {
+  TAC
+  ETC
+  CTC
+}
+
+// Vínculo comercial do terceiro — fixo pelo sistema, não varia por tenant
+// (D-020, mesma exceção de PaymentEventType). Determina a validade da
+// ficha de liberação de risco (D-023: ~6 meses agregado, por viagem para
+// autônomo/spot). Valores em português: vocabulário do próprio setor de
+// transporte rodoviário, sem tradução natural em uso (mesmo critério de
+// VehicleType, D-007).
+enum CarrierBondType {
+  SPOT
+  AGREGADO
+}
+
+// Perfil de transportador contratável (D-019/D-023, campos que a dívida de
+// nomenclatura da D-032 registrou como faltantes). Existência opcional
+// 1:1 com Party — é o perfil que torna a parte contratável como terceiro,
+// não um "tipo" a mais no cadastro; CarrierHire.thirdPartyId continua
+// aceitando qualquer Party, a obrigatoriedade do perfil é regra de
+// aplicação, quando o serviço existir, não constraint de banco.
+//
+// rntrc: texto livre, sem CHECK de formato — mesmo critério de
+// Vehicle.renavam (seção 1.6, não é regra estável o bastante pra fixar de
+// memória).
+//
+// bondType alimenta a validade da ficha de liberação (RiskClearance,
+// D-023) quando esse cálculo existir — não modelado aqui, é regra de
+// aplicação, não de banco (D-030).
+model CarrierProfile {
+  id           String          @id @db.Uuid
+  tenantId     String          @db.Uuid
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  partyId      String          @unique @db.Uuid
+  party        Party           @relation(fields: [partyId], references: [id])
+  rntrc        String
+  anttCategory AnttCategory
+  bondType     CarrierBondType
+  createdAt    DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime        @updatedAt @db.Timestamptz(3)
+
+  @@index([tenantId])
 }
 
 // Lista de domínio em tabela, não enum (D-020) — a D-020 cita "tipos de
