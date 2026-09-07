@@ -127,6 +127,9 @@ describe('Trip · composição de veículos (D-018)', () => {
         id: uuidv7(),
         tenantId: seed.tenant.id,
         branchId: seed.branch.id,
+        // seed (seedOrderScenario) já criou o Order número 1 neste
+        // tenant+branch — precisa de um número distinto (D-015).
+        number: 2,
         freightRateId: seed.freightRate.id,
         senderId: seed.party.id,
         recipientId: seed.party.id,

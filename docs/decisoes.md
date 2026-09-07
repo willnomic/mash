@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 07/09/2026 (D-034)
+Atualizado em 08/09/2026 (D-035)
 
 ---
 
@@ -1094,11 +1094,165 @@ por pedido explícito, pra não nascer solta uma rota pública nesta etapa.
 
 ### Observado, não alterado
 
-- `Order` não tem número de negócio sequencial — promovido a pendência bloqueante
-  (ver "Pendências › Bloqueantes" abaixo), não é gap solto.
+- `Order` não tem número de negócio sequencial — resolvido na D-035, logo abaixo.
 - `RiskClearance.ownerName` continua texto livre, sem religar com `Vehicle.ownerPartyId`
   (D-033) — mencionado na D-033 como motivo de existir o campo, não pedido pra religar
   ainda.
+
+---
+
+## D-035 · Numeração de negócio (D-015): `DocumentCounter`, aplicada a `Order`
+**Status:** Fechada
+
+Fecha a pendência bloqueante que a D-034 registrou. Escopo desta unidade: só `Order`.
+CT-e e fatura reaproveitam o mesmo mecanismo quando forem construídos — a tabela
+nasceu genérica o bastante pra isso, sem precisar de reescrita.
+
+### Não negociável, herdado direto da D-015
+
+- Tabela contadora com `SELECT ... FOR UPDATE`, nunca `SEQUENCE` do PostgreSQL —
+  `nextval()` nunca é desfeito por `ROLLBACK`, e é exatamente essa propriedade que
+  abriria buraco.
+- Chave primária (`Order.id`, UUID v7) e número de negócio (`Order.number`) nunca se
+  misturam. A UUID continua nunca aparecendo pro operador.
+
+### Escopo do contador: uma tabela `DocumentCounter` só, chave `(tenantId, branchId,
+documentType, series)`
+
+- `branchId` é CNPJ (D-011) — bate direto com "sequencial por CNPJ" que a D-015 exige
+  do CT-e.
+- `documentType` (`enum BusinessDocumentType`, só `ORDER` por ora) é o que torna a
+  tabela genérica: um contador só, reaproveitado por todo documento numerado, em vez
+  de uma tabela nova por tipo. Fixo pelo sistema, não varia por tenant — enum, não
+  tabela de domínio (D-020, mesmo critério de `PaymentEventType`/`UserRole`). `CTE`/
+  `INVOICE` entram como valor novo de enum quando essas unidades forem construídas —
+  migração aditiva (`ALTER TYPE ... ADD VALUE`), não muda a forma da tabela.
+- `series` (`String`, `NOT NULL DEFAULT '1'`) cobre a série fiscal que o CT-e exige
+  ("e por série", D-015). `Order` não tem série de verdade, sempre usa a constante
+  `"1"`. Deliberadamente não anulável: um `series` nulo quebraria a unicidade —
+  Postgres trata cada `NULL` como distinto num índice único comum, a mesma armadilha
+  que `QuoteStatus`/`DeductionReason` já resolveram com índice parcial (aqui nem
+  precisa, porque a coluna nunca é nula).
+
+Rejeitado explicitamente: `tenant+ano` pra `Order`. Nenhuma regra fiscal nem validação
+de campo exige reset anual — é convenção contábil, não fiscal, e inventar isso agora
+seria reservar complexidade não pedida (`CLAUDE.md` seção 2).
+
+### Onde o número é atribuído: na criação, dentro da MESMA transação do `INSERT`
+
+Diferente do CT-e (D-015: atribuído "no momento da transmissão", porque o rascunho
+pode ser descartado sem nunca ser transmitido), `Order` não tem rascunho — todo `Order`
+nasce válido e imutável (zero `UPDATE` liberado, D-017), num único `INSERT`
+(`OrderService.createFromQuote`/`createFromFreightRate`). Não existe o cenário que
+justifica separar "criação" de "atribuição do número" pro `Order`. O princípio
+genérico — número e gravação definitiva andam juntos, na mesma transação — vale pros
+dois casos; só o ponto do ciclo de vida em que isso ancora é diferente (criação aqui,
+transmissão no CT-e).
+
+### O que acontece se a transação falhar depois de pegar o número
+
+Como o incremento do contador e o `INSERT` do `Order` estão na mesma transação
+Postgres, um `ROLLBACK` desfaz as duas coisas juntas — não é "buraco aceitável", é
+**buraco estruturalmente impossível** por falha interna (corrida entre conexões, erro
+no meio da transação), contanto que todo caminho de criação passe pela mesma
+transação. Verificado com teste dedicado (ver "Verificação" abaixo), não só afirmado.
+
+Diferença real pro CT-e: lá pode existir buraco *depois* do commit, por rejeição da
+SEFAZ — evento externo que a D-015 já antecipa e resolve por "inutilização de
+numeração", fora do que esta tabela precisa resolver. O `DocumentCounter` só garante
+ausência de buraco *interno*; buraco externo por rejeição fiscal é um processo
+diferente, documentado, não um bug daqui.
+
+### Implementação
+
+`TenantPrisma` ganhou um método novo, `transaction()`, além do `db` já existente —
+`db` não serve pra operação atômica de vários passos porque cada chamada nele abre a
+própria mini-transação via `base.$transaction([...])` (`prisma-tenant.ts`), o que
+quebraria o compartilhamento de conexão que a atomicidade exige. `transaction()` abre
+uma transação interativa direto no `base`, chama `set_config` uma vez só no início
+(mesmo padrão de `TenantsService.create()`), e devolve o `tx` pro chamador usar em
+quantos passos precisar.
+
+`NumberingService.nextNumber(tx, {tenantId, branchId, documentType, series?})` — não
+injeta `TenantPrisma`, recebe o `tx` de fora: só faz sentido chamado de dentro da
+transação que também grava a entidade numerada. Três passos dentro do `tx`:
+1. `INSERT ... ON CONFLICT (tenantId, branchId, documentType, series) DO NOTHING` —
+   bootstrap idempotente da linha do contador; a unicidade do escopo garante que só
+   uma linha sobrevive mesmo se duas transações tentarem criar ao mesmo tempo.
+2. `SELECT "lastNumber" ... FOR UPDATE` — trava a linha; qualquer outra transação
+   pedindo número no mesmo escopo bloqueia aqui até esta commitar ou dar rollback.
+3. `UPDATE "lastNumber" = lastNumber + 1` — grava o novo valor, devolvido ao chamador.
+
+`OrderModule` ganhou dependência de um `NumberingModule` novo (`src/numbering/`) —
+serviço isolado, sem controller nem entidade própria além do `DocumentCounter`, pronto
+pra CT-e/fatura importarem quando existirem.
+
+### `TenantPrisma.transaction()` é primitivo de uso restrito
+
+Contorna o caminho normal do `forTenant()` — abre a transação direto no client `base`,
+em vez de passar pela extensão que injeta `set_config` em cada operação
+(`prisma-tenant.ts`). Necessário aqui (é o único jeito de compartilhar conexão entre o
+incremento do contador e o `INSERT` da entidade), mas é exatamente o tipo de atalho
+que fura D-012 em silêncio se usado errado daqui a três meses: o RLS "existe", os
+outros testes continuam passando, e nenhum sintoma aparece até um tenant ver dado de
+outro em produção.
+
+Três regras, sempre que alguém chamar `transaction()`:
+1. **Dentro do callback, use só o `tx` recebido** — nunca `this.tenantPrisma.db` nem
+   um `PrismaClient` novo. `db` abriria a própria mini-transação numa conexão
+   *diferente*, sem o tenant configurado nela; a proteção do `set_config` do
+   `transaction()` externo não alcançaria essa segunda conexão.
+2. **Nunca deixe o `tx` escapar do callback.** Depois que `transaction()` retorna, a
+   conexão já voltou pro pool — um `tx` guardado e usado depois é uma transação que
+   não existe mais.
+3. **Prende uma conexão do pool (`max: 10`, `node-postgres`) pelo tempo inteiro do
+   callback** — não é pra operação de duração longa ou imprevisível, sob risco de
+   esgotar o pool (o mesmo pool que o teste de concorrência da numeração já usa até o
+   limite, de propósito).
+
+**Verificado, não só declarado** — `test/tenant-prisma-transaction-rls.e2e-spec.ts`,
+espelhando o espírito do `rls-schema-guard.e2e-spec.ts` (guarda contra regressão
+silenciosa, não teste de feature nova): dentro de `transaction()`, leitura via
+`tx.<model>` e via `tx.$queryRaw` não enxergam dado de outro tenant; escrita no tenant
+alheio é recusada (`WITH CHECK` ainda se aplica); duas `transaction()` concorrentes de
+tenants diferentes não vazam uma pra outra; e — a armadilha 2 do
+`d012-multi-tenant-rls.md` ("o pool de conexões vaza tenant entre requisições") —
+depois que uma `transaction()` termina, uma consulta sem tenant repetida cinco vezes
+seguidas (pra aumentar a chance de reusar a mesma conexão física que acabou de voltar
+pro pool) continua vendo zero linhas. Os cinco testes passaram; rodados isolados mais
+5 vezes cada um (o de vazamento de pool, que é o mais sensível a timing/reuso de
+conexão) sem falhar nenhuma vez.
+
+### Verificação
+
+**Teste que importa mais que os outros: concorrência real**, não sequencial. Dispara
+10 criações de `Order` via `Promise.all` (mesmo tick do event loop, sem `await` entre
+os disparos), no mesmo `tenantId`+`branchId` — 10 cabe dentro do `max: 10` padrão do
+pool do `pg`, então as 10 conexões coexistem sem fila no driver, e a corrida acontece
+de verdade no Postgres, não só na aplicação. Prova dupla:
+- **Corretude:** os 10 números voltam distintos, formando exatamente `{1..10}` — nem
+  duplicado, nem buraco.
+- **Que a corrida foi real, não sorte:** uma conexão separada (`admin`, fora do pool
+  usado pelas transações sob teste) faz polling em `pg_stat_activity` durante a
+  corrida, procurando alguma sessão com `wait_event_type = 'Lock'` numa consulta que
+  menciona `DocumentCounter` — evidência concreta de que pelo menos uma transação
+  ficou esperando o lock de linha de outra. Rodado 5 vezes (a suíte completa mais 4
+  execuções isoladas do teste) sem falhar e sem cair no aviso explícito que o teste
+  imprimiria se a contenção não tivesse sido observada — não houve necessidade de
+  reportar corrida não reproduzida, porque ela foi reproduzida em todas as execuções.
+
+Também testado: números saem sequenciais em criações sucessivas (1,2,3...); unicidade
+de `(tenantId, branchId, number)` garantida no banco (`INSERT` duplicado recusado);
+`DocumentCounter` libera só `UPDATE` de `lastNumber` (identidade do escopo recusada) e
+tem `DELETE` revogado por inteiro; e o teste de rollback específico (transação pega o
+número, falha proposital antes de gravar o `Order`, a próxima criação real reaproveita
+o mesmo número — prova que o `ROLLBACK` desfez o incremento).
+
+`prisma migrate reset --force` reaplicou as 19 migrações do zero sem erro. 173 testes
+e2e + 4 unitários passando — 10 novos da numeração em si (`document-counter-rls.
+e2e-spec.ts` + `order-numbering.e2e-spec.ts`) mais os 5 do guarda de `transaction()`
+descrito acima (`tenant-prisma-transaction-rls.e2e-spec.ts`), sobre a base de 158 que
+já passava antes desta unidade.
 
 ## Pendências
 
@@ -1107,16 +1261,6 @@ por pedido explícito, pra não nascer solta uma rota pública nesta etapa.
       Mais urgente que qualquer decisão técnica.
 - [ ] **AT&M tem API para averbação, e a que custo?** Se não tiver, o piloto precisa
       aceitar conscientemente um retrocesso em relação ao sistema atual (D-023).
-- [ ] **D-015 (numeração sequencial de documento de negócio) não implementada —
-      `Order` não tem número.** Não é gap solto: a D-034 (ordem de coleta, PDF) já
-      contornou isso usando data + remetente + cidade como identificação porque não
-      havia número nenhum pra mostrar, mas o operador precisa dizer um número ao
-      motorista no telefone. A mesma lacuna volta com força total no CT-e — ali a
-      numeração é por CNPJ e série, sem buraco, sob validação da SEFAZ, e a D-015 já
-      descreve o mecanismo (tabela contadora com `SELECT ... FOR UPDATE`, nunca
-      `SEQUENCE`, atribuída no momento da transmissão). Não construir agora — só
-      registrado como bloqueante antes de `Order`/CT-e precisarem de número de
-      verdade.
 
 ### Técnicas
 - [ ] Onde entram testes automatizados, e quais primeiro

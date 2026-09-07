@@ -30,6 +30,7 @@ model Tenant {
   quoteStatuses QuoteStatus[]
   quotes    Quote[]
   orders    Order[]
+  documentCounters DocumentCounter[]
   tripStatuses  TripStatus[]
   trips         Trip[]
   riskClearances RiskClearance[]
@@ -59,6 +60,7 @@ model Branch {
   carrierHires CarrierHire[]
   occurrences  Occurrence[]
   pickupOrders PickupOrder[]
+  documentCounters DocumentCounter[]
 
   @@index([tenantId])
 }
@@ -428,6 +430,13 @@ model Order {
   tenant         Tenant       @relation(fields: [tenantId], references: [id])
   branchId       String       @db.Uuid
   branch         Branch       @relation(fields: [branchId], references: [id])
+  // Número de negócio (D-015) — nunca a PK, nunca aparece como UUID pro
+  // operador. Atribuído por DocumentCounter (mesmo mecanismo que vai
+  // servir CT-e/fatura), dentro da MESMA transação do INSERT desta linha
+  // — só assim um rollback desfaz as duas coisas juntas (por isso nunca
+  // SEQUENCE, cujo nextval() nunca é desfeito). Único dentro de
+  // tenant+branch, garantido no banco.
+  number         Int
   quoteId        String?      @db.Uuid
   quote          Quote?       @relation(fields: [quoteId], references: [id])
   freightRateId  String       @db.Uuid
@@ -447,6 +456,7 @@ model Order {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   trips     Trip[]
 
+  @@unique([tenantId, branchId, number])
   @@index([tenantId, branchId])
 }
 
@@ -911,4 +921,53 @@ model PickupOrderItem {
   createdAt     DateTime    @default(now()) @db.Timestamptz(3)
 
   @@index([tenantId, pickupOrderId])
+}
+
+// Tipo de documento numerado (D-015) — fixo pelo sistema, não varia por
+// tenant, por isso enum e não tabela (D-020, mesmo critério de
+// PaymentEventType/UserRole). Só ORDER por ora; CTE/INVOICE entram como
+// valor novo de enum quando essas unidades forem construídas — migração
+// aditiva (ALTER TYPE ... ADD VALUE), não muda a forma do DocumentCounter.
+enum BusinessDocumentType {
+  ORDER
+}
+
+// Contador de numeração de negócio (D-015) — nunca SEQUENCE do Postgres:
+// sequence consome número em rollback, abre buraco, e buraco de CT-e
+// exige inutilização de numeração junto à SEFAZ. Tabela contadora comum,
+// incrementada sob SELECT ... FOR UPDATE dentro da MESMA transação que
+// grava a entidade numerada (TenantPrisma.transaction + NumberingService,
+// não TenantPrisma.db — cada chamada em .db abre a própria mini-transação
+// via base.$transaction([...]), o que quebraria o compartilhamento de
+// conexão que a atomicidade exige aqui). Um ROLLBACK da transação de
+// criação desfaz o incremento junto, porque é UPDATE numa tabela normal,
+// não nextval() de SEQUENCE (que nunca é desfeito).
+//
+// Uma tabela só, reaproveitável por qualquer documento futuro — não uma
+// tabela por tipo. Chave pensada pra CT-e desde já, sem precisar de nova
+// migração quando ele existir:
+// - branchId é CNPJ (D-011) — bate com "sequencial por CNPJ" da D-015
+// - documentType distingue o tipo (ORDER hoje, CTE/INVOICE depois)
+// - series cobre a série fiscal que CT-e exige ("e por série", D-015);
+//   Order não tem série de verdade, sempre usa a constante "1" — NOT NULL
+//   com default, não anulável: um "series" anulável quebraria a
+//   unicidade (Postgres trata cada NULL como distinto num índice único
+//   comum, mesma armadilha que QuoteStatus/DeductionReason já resolveram
+//   com índice parcial — aqui nem precisa, porque não é nulo).
+//
+// lastNumber é o próximo número já emitido (não o próximo a emitir) —
+// NumberingService lê com FOR UPDATE, soma 1, grava, e devolve a soma.
+model DocumentCounter {
+  id           String               @id @db.Uuid
+  tenantId     String               @db.Uuid
+  tenant       Tenant               @relation(fields: [tenantId], references: [id])
+  branchId     String               @db.Uuid
+  branch       Branch               @relation(fields: [branchId], references: [id])
+  documentType BusinessDocumentType
+  series       String               @default("1")
+  lastNumber   Int                  @default(0)
+  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime             @updatedAt @db.Timestamptz(3)
+
+  @@unique([tenantId, branchId, documentType, series])
 }

@@ -63,6 +63,10 @@ export async function seedOrderScenario(
       id: uuidv7(),
       tenantId: tenant.id,
       branchId: branch.id,
+      // Cenário cria um tenant novo a cada chamada — número 1 é sempre
+      // válido no escopo tenant+branch. Numeração de verdade (D-015) é
+      // testada em order-numbering.e2e-spec.ts, via NumberingService.
+      number: 1,
       freightRateId: freightRate.id,
       senderId: party.id,
       recipientId: party.id,

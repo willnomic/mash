@@ -7,6 +7,7 @@ import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 import { OrderService } from '../src/order/order.service.js';
 import { QuoteService } from '../src/quote/quote.service.js';
 import { TenantPrisma } from '../src/tenant/tenant-prisma.service.js';
+import { NumberingService } from '../src/numbering/numbering.service.js';
 
 // Roda contra o PostgreSQL real do docker-compose — a garantia provada
 // aqui (congelamento, imutabilidade) é do banco e do serviço juntos, não
@@ -62,7 +63,7 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     seed = await seedTenant('A', 'transportadora-a');
     const tenantPrisma = tenantPrismaFor(seed.tenant.id);
     quoteService = new QuoteService(tenantPrisma);
-    orderService = new OrderService(tenantPrisma);
+    orderService = new OrderService(tenantPrisma, new NumberingService());
   });
 
   afterAll(async () => {

@@ -4,9 +4,11 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 07/09/2026, commit `5072cba` (D-033: `Party`, `CarrierProfile`,
-`Vehicle.ownerPartyId`, já em `master`) + trabalho não commitado desta sessão (D-034:
-`PickupOrder`, ordem de coleta em PDF).
+Atualizado em 08/09/2026, commit `5072cba` (D-033: `Party`, `CarrierProfile`,
+`Vehicle.ownerPartyId`, já em `master`) + trabalho não commitado desta sessão: D-034
+(`PickupOrder`, ordem de coleta em PDF) e D-035 (`DocumentCounter`, numeração de
+negócio aplicada a `Order` — fecha a pendência bloqueante que a D-034 tinha
+registrado).
 
 ---
 
@@ -21,6 +23,18 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   `ClsService`/`TenantPrisma` (D-012 Passo 4)
 - `Tenant` nasce com filial padrão numa transação só (`TenantsService`, D-011/D-030 — não
   por trigger, preserva D-015)
+- Numeração de negócio (D-015/D-035): `DocumentCounter`, tabela contadora incrementada
+  sob `SELECT ... FOR UPDATE` — nunca `SEQUENCE` (que não desfaz `nextval()` em
+  `ROLLBACK`, abriria buraco). Chave `(tenantId, branchId, documentType, series)` —
+  genérica o bastante pra CT-e/fatura reaproveitarem sem reescrita quando existirem;
+  só `Order` (`documentType = 'ORDER'`) usa por ora. `TenantPrisma.transaction()`
+  (novo, ao lado de `.db`) abre a transação interativa que `NumberingService.
+  nextNumber()` usa — número e gravação da entidade andam na mesma transação, então
+  `ROLLBACK` desfaz as duas coisas juntas. Verificado sob concorrência real (10
+  criações simultâneas via `Promise.all`, contenção de lock observada de verdade via
+  `pg_stat_activity`, não só resultado batendo por sorte). `transaction()` é
+  primitivo de uso restrito — contorna o `forTenant()` normal, documentado em D-035
+  com as três regras de uso e guarda dedicado provando que hoje não fura RLS
 
 **Cadastro** (`Tenant`, `Branch`, `User`, `Party`, `Address`, `Driver`, `Vehicle`, `Lane`,
 `CarrierProfile`)
@@ -47,7 +61,9 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
 - `Order`: `branchId` obrigatório (D-011), `senderId`/`recipientId`/`tomadorId` como três
   FKs próprias pra `Party` (D-031 — só `tomador` fica em português, tem definição
   fiscal; os outros dois traduzem sem perda), congela valor nos dois caminhos de
-  precificação (via `Quote` ou direto da `FreightRate`), sem nenhum `UPDATE` liberado
+  precificação (via `Quote` ou direto da `FreightRate`), sem nenhum `UPDATE` liberado.
+  `number` (D-015/D-035): atribuído por `DocumentCounter` na mesma transação do
+  `INSERT`, único em `tenantId+branchId`, nunca a PK, nunca aparece como UUID
 
 **Operação** (`Trip`, `TripStatus`, `RiskClearance`, `Occurrence`, `OccurrenceType`)
 - `Trip`: um destino por viagem (D-018), composição de veículo (`vehicleId`+
@@ -74,8 +90,9 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   `Trip.driverId`/`vehicleId`, `orderId` chega via `trip.orderId`. Itens em tabela
   filha (não jsonb), mesmo critério de `Address`. Totais do cabeçalho (peso, volumes,
   cubagem) congelados na criação, não derivados da soma dos itens (D-014). Sem número
-  de negócio sequencial próprio — não pedido, e `Order` também não tem (gap
-  pré-existente, D-015). Imutável por inteiro (`UPDATE`/`DELETE` revogados) — corrigir
+  de negócio sequencial próprio — não pedido; `Order` ganhou o dele na D-035
+  (`DocumentCounter`), `PickupOrder` continua sem. Imutável por inteiro (`UPDATE`/
+  `DELETE` revogados) — corrigir
   é emitir de novo, mesmo critério de `Order`/`CarrierHire`. PDF gerado sob demanda na
   resposta HTTP (`pdfkit`), nunca gravado em disco/storage, sem rota pública — link
   compartilhável fica reservado pra D-010
@@ -109,11 +126,13 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
 (protegido, gera o PDF sob demanda — D-034). `Quote`/`Order`/`Trip` têm serviço
 (`QuoteService`, `OrderService`) mas nenhum controller; `PickupOrder` tem os dois, mas
 só porque gerar PDF é lógica que não dá pra testar batendo direto no banco — criação
-do registro continua via Prisma direto, sem service.
+do registro continua via Prisma direto, sem service. `NumberingService` (D-035) é
+serviço sem controller nem entidade própria além de `DocumentCounter` — consumido por
+`OrderModule`, pronto pra CT-e/fatura importarem.
 
 ---
 
-## Testes: 162 passando (4 unitários + 158 e2e), zero mock de banco
+## Testes: 177 passando (4 unitários + 173 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -144,6 +163,9 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | RLS de `PickupOrderItem` | `pickup-order-item-rls.e2e-spec.ts` |
 | PDF real (não mock): 1 item cabe em 1 página; 40 itens produzem mais de uma página sem sobrepor nem cortar texto, todos os 40 presentes no texto extraído de volta com `pdf-parse`, cabeçalho "(continuação)" bate com o total de páginas menos uma; `UPDATE`/`DELETE` recusados em `PickupOrder` e `PickupOrderItem` | `pickup-order-pdf.e2e-spec.ts` |
 | Rota `GET /pickup-orders/:id/pdf` ponta a ponta (sem token → 401, com token → PDF com `Content-Type` correto, token de outro tenant não vaza PDF alheio) | `pickup-order-http.e2e-spec.ts` |
+| RLS de `DocumentCounter` | `document-counter-rls.e2e-spec.ts` |
+| Numeração (D-015): sequencial em criações sucessivas; unicidade de `(tenantId, branchId, number)` garantida no banco; `DocumentCounter` libera só `UPDATE` de `lastNumber`, `DELETE` recusado; rollback depois de pegar o número não desperdiça o número (reaproveitado na próxima criação real); **concorrência real** — 10 criações simultâneas via `Promise.all` produzem 10 números distintos sem buraco, com contenção de lock observada de verdade em `pg_stat_activity` (não só resultado correto por acaso) | `order-numbering.e2e-spec.ts` |
+| Guarda: `TenantPrisma.transaction()` continua protegido por RLS (D-012, D-035) — leitura via `tx.<model>` e via `tx.$queryRaw` não vazam tenant, escrita no tenant alheio recusada, duas `transaction()` concorrentes de tenants diferentes não se misturam, e o contexto de tenant não vaza pra próxima conexão do pool depois que a transação termina | `tenant-prisma-transaction-rls.e2e-spec.ts` |
 
 Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
@@ -151,8 +173,8 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-Nada no momento — última unidade concluída foi a D-034 (`PickupOrder`, ordem de coleta
-em PDF), ainda não commitada nesta sessão.
+Nada no momento — última unidade concluída foi a D-035 (`DocumentCounter`, numeração
+de negócio aplicada a `Order`), ainda não commitada nesta sessão.
 
 ---
 
@@ -219,7 +241,7 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (18 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (19 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
 - **`pdfkit`/`pdf-parse` instalados nesta sessão** (D-034) — mesmo `--legacy-peer-deps`
   do `nestjs-cls`, nenhuma vulnerabilidade nova no `npm audit` (as 4 de alta severidade
