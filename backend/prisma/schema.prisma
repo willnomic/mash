@@ -29,6 +29,8 @@ model Tenant {
   freightRates         FreightRate[]
   quoteStatuses        QuoteStatus[]
   quotes               Quote[]
+  quoteCostTypes       QuoteCostType[]
+  quoteCostLines       QuoteCostLine[]
   orderStatuses        OrderStatus[]
   orders               Order[]
   documentCounters     DocumentCounter[]
@@ -366,34 +368,190 @@ model QuoteStatus {
 // listada como movimento no D-018 (cadastro é da empresa, D-011) — é
 // registro de precificação, não de operação.
 //
-// Congela os valores da FreightRate no fechamento (D-014) — nunca
-// recalculado depois. Imutabilidade garantida no banco: mash_app só tem
-// UPDATE liberado em statusId e updatedAt (GRANT por coluna, mesmo
-// mecanismo do FreightRate) e DELETE revogado (D-017: é histórico —
-// "perdida" é estado, não remoção).
+// Dois caminhos mutuamente exclusivos (D-041), mesma tabela — "o fluxo
+// diverge, o modelo não" (D-018):
+//
+// 1. TABELA (o que já existia): freightRateId preenchido, valores
+//    copiados da FreightRate no INSERT — imutável desde a criação.
+// 2. CUSTO (D-041, validação de campo: dor nº 1 do operador é "cálculo de
+//    tudo, margem, imposto"): freightRateId nulo, marginPercentage e
+//    icmsUf informados na criação, linhas de custo em QuoteCostLine.
+//    total/icmsRateApplied/ibsRateApplied/cbsRateApplied só existem
+//    depois do fechamento — QuoteService.close() soma as linhas, lê
+//    TaxRate vigente na data do fechamento, recompõe o imposto POR
+//    DENTRO e aplica a margem, também por dentro (ver QuotePricingCalculator).
+//
+// CHECK na migração garante que os dois caminhos nunca se misturam numa
+// mesma linha: campos do caminho 1 preenchidos ⟺ campos do caminho 2
+// nulos, e vice-versa. total (preço final) é o único campo comum aos
+// dois — para TABELA é conhecido no INSERT; para CUSTO só existe depois
+// do fechamento.
+//
+// Imutabilidade garantida no banco (D-014): mash_app só tem UPDATE
+// liberado em statusId, icmsRateApplied, ibsRateApplied, cbsRateApplied,
+// total e updatedAt (GRANT por coluna) — freightRateId/rate/
+// minimumFreight/additionalPercentage/marginPercentage/icmsUf nunca
+// mudam depois de criados, nos dois caminhos. DELETE revogado (D-017: é
+// histórico — "perdida" é estado, não remoção).
 model Quote {
-  id                   String      @id @db.Uuid
-  tenantId             String      @db.Uuid
-  tenant               Tenant      @relation(fields: [tenantId], references: [id])
+  id                   String        @id @db.Uuid
+  tenantId             String        @db.Uuid
+  tenant               Tenant        @relation(fields: [tenantId], references: [id])
   // Referência de auditoria à linha de origem (D-014) — não redundante
-  // com party/lane: ambos são derived via freightRate.
-  freightRateId        String      @db.Uuid
-  freightRate          FreightRate @relation(fields: [freightRateId], references: [id])
-  statusId             String      @db.Uuid
-  status               QuoteStatus @relation(fields: [statusId], references: [id])
-  // Congelado no fechamento — cópia, não consulta. Escalas de D-013.
-  rate                 Decimal     @db.Decimal(18, 6)
-  minimumFreight       Decimal     @db.Decimal(14, 2)
-  additionalPercentage Decimal     @db.Decimal(7, 4)
-  // Cálculo real de frete (peso x tarifa, piso mínimo) não existe ainda —
-  // entra quando Order/Quote ganharem itens de carga. Por ora, quem
-  // calcula e informa é o chamador do serviço.
-  total                Decimal     @db.Decimal(14, 2)
-  createdAt            DateTime    @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime    @updatedAt @db.Timestamptz(3)
+  // com party/lane: ambos são derived via freightRate. Nulo no caminho
+  // por custo (D-041) — não existe FreightRate nesse caminho.
+  freightRateId        String?       @db.Uuid
+  freightRate          FreightRate?  @relation(fields: [freightRateId], references: [id])
+  statusId             String        @db.Uuid
+  status               QuoteStatus   @relation(fields: [statusId], references: [id])
+  // Congelado no fechamento (caminho TABELA) — cópia, não consulta.
+  // Escalas de D-013. Nulo no caminho CUSTO.
+  rate                 Decimal?      @db.Decimal(18, 6)
+  minimumFreight       Decimal?      @db.Decimal(14, 2)
+  additionalPercentage Decimal?      @db.Decimal(7, 4)
+  // Margem pedida pelo operador (D-041) — ENTRADA do cálculo, não saída.
+  // Só existe no caminho CUSTO, informada na criação, nunca muda depois
+  // (recalcular com margem diferente é cotação nova, não edição).
+  marginPercentage     Decimal?      @db.Decimal(7, 4)
+  // UF de referência do ICMS (D-041) — só existe no caminho CUSTO. Sem
+  // Party/Lane nesta tabela pra derivar UF de outro jeito; obrigatório
+  // pra escolher a linha certa de TaxRate.
+  icmsUf               String?       @db.Char(2)
+  // Alíquotas efetivamente usadas no fechamento (D-041/D-014) — snapshot,
+  // não referência: se a lei mudar depois, uma cotação já fechada não
+  // muda de valor. Nulas até o fechamento no caminho CUSTO; nunca
+  // preenchidas no caminho TABELA (ele não usa TaxRate).
+  icmsRateApplied      Decimal?      @db.Decimal(7, 4)
+  ibsRateApplied       Decimal?      @db.Decimal(7, 4)
+  cbsRateApplied       Decimal?      @db.Decimal(7, 4)
+  // Preço final. Caminho TABELA: conhecido no INSERT (cálculo de frete
+  // real ainda não existe, quem chama informa). Caminho CUSTO: só existe
+  // depois do fechamento — soma dos custos + recomposição de imposto +
+  // margem (D-041).
+  total                Decimal?      @db.Decimal(14, 2)
+  createdAt            DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime      @updatedAt @db.Timestamptz(3)
   orders               Order[]
+  // Linhas de custo (D-041) — só existem no caminho CUSTO. Tabela filha,
+  // nunca coluna fixa (mesmo critério de PickupOrderItem/CarrierPayment):
+  // custo novo é INSERT, não migração.
+  costLines            QuoteCostLine[]
 
   @@index([tenantId, statusId])
+}
+
+// Tipo de custo de viagem (D-041) — lista de domínio em tabela, não enum
+// (D-020): tenantId nulo = padrão do sistema, preenchido = tipo próprio
+// daquele tenant. Mesmo padrão de DeductionReason/QuoteStatus. Custo novo
+// (ex.: "descarga") é INSERT nesta tabela, nunca migração — é exatamente
+// o que a tabela existe pra resolver.
+model QuoteCostType {
+  id        String          @id @db.Uuid
+  tenantId  String?         @db.Uuid
+  tenant    Tenant?         @relation(fields: [tenantId], references: [id])
+  code      String
+  name      String
+  createdAt DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime        @updatedAt @db.Timestamptz(3)
+  costLines QuoteCostLine[]
+
+  @@unique([tenantId, code])
+}
+
+// Linha de custo da viagem (D-041) — tabela filha, nunca coluna fixa
+// (mesmo critério de PickupOrderItem/CarrierPayment). Só existe no
+// caminho CUSTO de Quote (freightRateId nulo) — nada no banco impede
+// gravar numa Quote do caminho TABELA, mas o QuoteService não abre esse
+// caminho (D-030: regra de negócio na aplicação, não em CHECK que
+// precisaria enxergar a linha pai).
+//
+// Sem branchId: Quote não tem (é registro de precificação da empresa,
+// não movimento de filial, D-011) — filha herda a mesma ausência.
+//
+// Imutável por inteiro desde a criação (UPDATE/DELETE revogados, sem
+// exceção de coluna) — mesmo critério de PickupOrderItem/CarrierPayment.
+// "Congela no fechamento" (D-041) fica satisfeito de graça: a linha
+// nunca foi editável, então não há nada extra a congelar nela quando a
+// Quote fecha — o que o fechamento congela de fato são as alíquotas, a
+// margem e o preço (colunas em Quote).
+model QuoteCostLine {
+  id          String        @id @db.Uuid
+  tenantId    String        @db.Uuid
+  tenant      Tenant        @relation(fields: [tenantId], references: [id])
+  quoteId     String        @db.Uuid
+  quote       Quote         @relation(fields: [quoteId], references: [id])
+  costTypeId  String        @db.Uuid
+  costType    QuoteCostType @relation(fields: [costTypeId], references: [id])
+  description String?
+  // Escala de valor final (D-013) — é um custo estimado em reais, não uma
+  // tarifa unitária.
+  amount      Decimal       @db.Decimal(14, 2)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@index([tenantId, quoteId])
+}
+
+// Tipo de tributo (D-041) — fixo pelo sistema, nunca varia por tenant
+// (D-020, mesmo critério de UserRole/PaymentEventType): nenhum tenant
+// "customiza" ICMS/IBS/CBS, são valores de lei.
+enum TaxType {
+  ICMS
+  IBS
+  CBS
+}
+
+// Alíquota de tributo com vigência (D-041), mesmo mecanismo do
+// FreightRate (D-014): sem vigência, recotar março em setembro produz
+// número diferente do que foi cobrado em março, e alíquota muda por lei
+// — não é hipótese.
+//
+// SEM tenantId, deliberadamente — diferente de QuoteStatus/
+// DeductionReason/QuoteCostType. Aquelas são listas de domínio que um
+// tenant legitimamente pode customizar (D-020); alíquota de tributo não
+// é configuração de tenant, é lei — dar a um tenant o poder de "definir
+// sua própria alíquota" não é o mesmo risco que "definir seu próprio
+// status de pedido". RLS continua obrigatório (guarda de schema exige em
+// toda tabela, D-012) mas a política é `USING (true)` — mesmo mecanismo
+// já usado no SELECT de Tenant.slug (D-029, pré-login): não há fronteira
+// de tenant nenhuma pra impor aqui. mash_app só tem SELECT (GRANT na
+// migração revoga INSERT/UPDATE/DELETE) — mudar alíquota é migração
+// revisada, nunca escrita da aplicação. Não invento autoridade sobre
+// valor de lei (CLAUDE.md 1.6): ver decisoes.md D-041 pros valores
+// marcados "a calibrar com o contador".
+//
+// uf nulo = nacional (IBS/CBS); preenchido = ICMS daquela UF. CHECK na
+// migração amarra isso (ICMS sempre com uf, IBS/CBS sempre sem).
+//
+// Sobreposição de vigência bloqueada por EXCLUDE USING gist (btree_gist,
+// já habilitado desde FreightRate) — usa coalesce(uf, '') no lugar de uf
+// puro: EXCLUDE, como UNIQUE, trata cada NULL como distinto de outro
+// NULL, então duas linhas de IBS (uf nulo) nunca colidiriam via `uf WITH
+// =` sem essa normalização — mesma armadilha de NULL que QuoteStatus/
+// DeductionReason já resolveram com índice parcial, aqui resolvida no
+// EXCLUDE.
+model TaxRate {
+  id        String   @id @db.Uuid
+  taxType   TaxType
+  uf        String?  @db.Char(2)
+  // Escala de percentual (D-013, que já cita ICMS como exemplo textual
+  // de numeric(7,4)).
+  rate      Decimal  @db.Decimal(7, 4)
+  // Datas de calendário, não timestamp (D-016) — vigência de lei não tem
+  // hora.
+  validFrom DateTime @db.Date
+  validTo   DateTime @db.Date
+  // Marca alíquota-placeholder — valor plausível, não pesquisado, "a
+  // calibrar com o contador" (D-041). As 27 linhas de ICMS semeadas
+  // nascem `true`; IBS/CBS (dado real do usuário, LC 214/2025) nascem
+  // `false`. Um comentário na migração não impede ninguém de usar o
+  // placeholder em produção — TaxRateService.findRate() recusa devolver
+  // uma linha `isPlaceholder = true` fora de dev/test (NODE_ENV), e é
+  // essa recusa em código, não este comentário, que garante a coisa.
+  isPlaceholder Boolean @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([taxType, uf])
 }
 
 // Pedido (D-018). branchId obrigatório: movimento é da filial (D-011) —

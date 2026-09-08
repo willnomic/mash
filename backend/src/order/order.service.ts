@@ -37,6 +37,23 @@ export class OrderService {
       const quote = await tx.quote.findUniqueOrThrow({
         where: { id: input.quoteId },
       });
+      // Quote agora tem dois caminhos de precificação (D-041): TABELA
+      // (freightRateId+rate/minimumFreight/additionalPercentage) e CUSTO
+      // (marginPercentage+icmsUf, sem FreightRate). Order só sabe
+      // congelar o caminho TABELA — não foi pedido estender Order pro
+      // caminho CUSTO nesta unidade. Guarda explícita em vez de deixar o
+      // TypeScript aceitar null silenciosamente nos campos abaixo.
+      if (
+        quote.freightRateId === null ||
+        quote.rate === null ||
+        quote.minimumFreight === null ||
+        quote.additionalPercentage === null ||
+        quote.total === null
+      ) {
+        throw new Error(
+          'Quote sem FreightRate (caminho de custo, D-041) não pode gerar Order ainda — caminho não implementado.',
+        );
+      }
 
       const number = await this.numberingService.nextNumber(tx, {
         tenantId: quote.tenantId,

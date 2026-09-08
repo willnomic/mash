@@ -35,13 +35,13 @@ nada aqui foi verificado em produção ainda.
 - [ ] **Versão do Node exigida pelo `@angular-devkit` (dependência do `@nestjs/cli`).**
       `npm install` no `backend/` emite `EBADENGINE`: `@angular-devkit/core`,
       `@angular-devkit/schematics` e `@angular-devkit/schematics-cli` exigem
-      `node ^22.22.3 || ^24.15.0 || >=26.0.0`; a máquina de desenvolvimento roda
-      `v22.20.0` (abaixo do mínimo da faixa 22.x). Hoje é só aviso, não erro — mas se
-      o passo de build da plataforma de deploy usa `npm ci` com engine mais estrito,
-      ou se a imagem de build tiver uma versão de Node diferente da local, o build
-      pode falhar em vez de só avisar. Confirmar a versão de Node da plataforma de
-      deploy antes do primeiro build, e alinhar (`engines` no `package.json`, ou
-      variável de versão do Node na plataforma).
+      `node ^22.22.3 || ^24.15.0 || >=26.0.0`. **Corrigido 08/09/2026 (D-041) — texto
+      desatualizado desde a sessão da D-038**: a máquina de desenvolvimento está em
+      `v24.20.0` (dentro da faixa 24.x, o aviso não dispara mais localmente), não mais
+      `v22.20.0` como este item dizia. O item em si continua de pé: não verificado se
+      a versão de Node da *plataforma de deploy* está dentro de alguma das três faixas
+      aceitas — confirmar antes do primeiro build, e alinhar (`engines` no
+      `package.json`, ou variável de versão do Node na plataforma).
 
 - [ ] **As duas URLs de banco, como segredos separados na plataforma.**
       `DATABASE_URL` (dono — só `prisma migrate deploy`, nunca a aplicação em runtime)

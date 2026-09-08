@@ -49,11 +49,21 @@ export class TenantPrisma {
   // 3. Prende uma conexão do pool (max 10, node-postgres) pelo tempo
   //    inteiro do callback — não chamar pra operação de duração longa ou
   //    imprevisível, sob risco de esgotar o pool.
-  transaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  // Segundo argumento do callback (tenantId) é o mesmo valor já usado
+  // pro set_config acima — exposto porque criar uma entidade "raiz" sem
+  // nenhum pai do qual derivar o tenantId (ex.: QuoteService.
+  // createCostBased, D-041) precisa do valor pra gravar a coluna, e sem
+  // isso o único jeito seria a própria regra de negócio ler ClsService
+  // direto, violando "tenantId nunca aparece no código de negócio"
+  // (tenant-prisma.service.ts, topo do arquivo). Continua vindo só
+  // daqui, não de um segundo caminho.
+  transaction<T>(
+    fn: (tx: Prisma.TransactionClient, tenantId: string) => Promise<T>,
+  ): Promise<T> {
     const tenantId = this.tenantId;
     return base.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, TRUE)`;
-      return fn(tx);
+      return fn(tx, tenantId);
     });
   }
 }

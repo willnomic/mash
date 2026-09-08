@@ -4,10 +4,9 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 08/09/2026, commit `1fc9215` (D-034/D-035/D-036/D-037 já em `master`) +
-trabalho não commitado desta sessão: D-038 (`OrderStatus` — fecha o achado nº 4 da
-auditoria D-036, `Order` sem status/cancelamento — e `Order.customerReference` com
-índice de busca, os dois pontos conclusivos de uma planilha operacional real).
+Atualizado em 08/09/2026, commit `6030be9` (D-034 a D-040 já em `master`) + trabalho não
+commitado desta sessão: D-041 (precificação de cotação — caminho de custo em `Quote`,
+`QuoteCostLine`/`QuoteCostType`, `TaxRate` com vigência, `QuotePricingCalculator`).
 
 ---
 
@@ -53,10 +52,46 @@ Só backend (`backend/`). Nenhuma tela existe ainda.
   única de verdade, um enum paralelo à FK podia divergir dela)
 - `Lane`: trecho origem-destino
 
-**Comercial** (`FreightRate`, `QuoteStatus`, `Quote`, `OrderStatus`, `Order`)
+**Comercial** (`FreightRate`, `QuoteStatus`, `Quote`, `QuoteCostType`, `QuoteCostLine`,
+`TaxRate`, `OrderStatus`, `Order`)
 - `FreightRate`: vigência com `EXCLUDE USING gist` (D-014), imutabilidade por `GRANT`
   de coluna — só `validTo`/`updatedAt` são alteráveis, `DELETE` revogado
-- `Quote`: status em tabela (D-020), congela valores da `FreightRate` no fechamento
+- `Quote`: status em tabela (D-020). Dois caminhos mutuamente exclusivos (D-041, `CHECK`
+  no banco): **TABELA** (existente) — `freightRateId` preenchido, congela valores da
+  `FreightRate` no `INSERT`; **CUSTO** (D-041, validação de campo — dor nº 1 do
+  operador é "cálculo de tudo, margem, imposto") — `freightRateId` nulo,
+  `marginPercentage`+`icmsUf` na criação, `QuoteCostLine` filhas, preço só existe
+  depois de `close()`. `close()` no caminho custo: soma as linhas, lê `TaxRate` vigente
+  na data do fechamento, recompõe imposto em **duas etapas** (correção 08/09/2026 — a
+  versão original tratava ICMS+IBS+CBS como pool único, errado: IBS/CBS não entram na
+  própria base): etapa 1, ICMS por dentro (`custo ÷ (1−icms)`); etapa 2, IBS/CBS por
+  fora, somados sobre o resultado da etapa 1, sem gross-up. Margem (etapa 3) por
+  dentro — **implementação atual, não confirmada em campo** (`QuotePricingCalculator`,
+  `src/quote/quote-pricing-calculator.ts`, função pura testada por unitário; pendência
+  de validação com o sócio em `decisoes.md`). Congela
+  `icmsRateApplied`/`ibsRateApplied`/`cbsRateApplied`/`total` via `GRANT` de coluna.
+  `OrderService` só sabe consumir o caminho TABELA — guarda explícita, caminho CUSTO→
+  `Order` não construído nesta unidade
+- `QuoteCostType`: domínio, `tenantId` nulo = padrão (mesmo padrão `DeductionReason`);
+  semeados `FREIGHT`/`TOLL`/`FUEL`/`INSURANCE`/`FEES`
+- `QuoteCostLine`: filha de `Quote` (só caminho CUSTO), imutável por inteiro desde a
+  criação (mesmo critério `PickupOrderItem`/`CarrierPayment`) — "congela no fechamento"
+  fica satisfeito de graça, nunca foi editável. Cobre o lado do CUSTO — falta o lado do
+  PREÇO decomposto (CT-e exige `valoresPrestacao.componentes`, não construído, só
+  registrado em `decisoes.md` D-041)
+- `TaxRate` (D-041): alíquota com vigência, mesmo mecanismo do `FreightRate`. **Sem
+  `tenantId`** — é lei, não configuração de tenant (D-020 não se aplica); RLS
+  `USING (true)` (mesmo mecanismo do `Tenant.slug`, D-029, os dois tratados
+  explicitamente — com o motivo escrito — no guarda de schema de RLS,
+  `rls-schema-guard.e2e-spec.ts`), `mash_app` só tem `SELECT`. `isPlaceholder`
+  (correção 08/09/2026): marca as 27 linhas de ICMS como placeholder;
+  `TaxRateService.findRate()` recusa devolvê-las fora de `NODE_ENV`
+  `development`/`test` (falha fechada — vazio/ausente também recusa) — não é comentário
+  segurando, é recusa em código. `EXCLUDE USING gist` com `coalesce(uf,'')` — ICMS por UF, IBS/CBS nacional (`uf`
+  nulo), `CHECK` amarra taxType↔uf. Semeado: IBS 0,1%/CBS 0,9% (LC 214/2025, ano de
+  calibragem 2026, dado pelo usuário) e ICMS — 27 UF, **todas com o mesmo 18,0000%
+  placeholder, marcado a calibrar com o contador**, deliberadamente uniforme pra não
+  parecer pesquisa real (CLAUDE.md 1.6)
 - `OrderStatus` (D-038, achado nº 4 da auditoria D-036): mesmo padrão `QuoteStatus` —
   `tenantId` nulo = padrão do sistema, catálogo compartilhado. Semeados só
   `IN_PROGRESS`/`COMPLETED`/`CANCELLED` (evidência de planilha real: coluna STATUS com
@@ -158,7 +193,7 @@ serviço sem controller nem entidade própria além de `DocumentCounter` — con
 
 ---
 
-## Testes: 199 passando (4 unitários + 195 e2e), zero mock de banco
+## Testes: 235 passando (10 unitários + 225 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -180,6 +215,14 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | Status compartilhado (`tenantId` nulo = padrão do sistema) | `quote-status-rls.e2e-spec.ts` |
 | `OrderStatus` compartilhado (`tenantId` nulo visível a todos, status próprio de outro tenant invisível, D-038) | `order-status-rls.e2e-spec.ts` |
 | `Order.customerReference`: busca por pedaço do meio do número (não só prefixo), case-insensitive, campo opcional (D-038) | `order-customer-reference-search.e2e-spec.ts` |
+| `QuotePricingCalculator` (D-041, unitário — sem banco): etapa 1 isolada (ICMS por dentro, `preço = base ÷ (1−alíquota)`), etapa 2 isolada (IBS/CBS por fora — soma simples, ausência de dízima prova que não é gross-up), caso conferido à mão do pipeline completo (custo 820/ICMS 18%/IBS 0,1%+CBS 0,9%/margem 20% → 1262,5 sem dízima em nenhuma etapa), margem sai igual à pedida depois da recomposição, erro de markup-sobre-custo demonstrado como inferior, soma de custo via `.plus()` nunca operador nativo | `quote-pricing-calculator.spec.ts` |
+| `TaxRate` sem fronteira de tenant — qualquer tenant (e sem tenant nenhum) enxerga, `INSERT`/`UPDATE`/`DELETE` recusados pra `mash_app` (D-041) | `tax-rate-rls.e2e-spec.ts` |
+| Vigência de `TaxRate`: sobreposição recusada/aceita (mesmo tributo+UF), sobreposição entre duas linhas nacionais (`uf` nulo) recusada — prova o `coalesce`, `CHECK` taxType↔uf, lookup por data usa a alíquota daquela data (não a de hoje) | `tax-rate-validity.e2e-spec.ts` |
+| `TaxRateService` recusa alíquota placeholder fora de `NODE_ENV` `development`/`test` (inclusive vazia/ausente — falha fechada), aceita em `development`/`test`, IBS/CBS passam mesmo em `production` (não são placeholder), confirma no banco que as 27 linhas de ICMS nascem `isPlaceholder=true` (D-041) | `tax-rate-placeholder-guard.e2e-spec.ts` |
+| Guarda de RLS: `TaxRate`/`Tenant` tratadas explicitamente como exceções deliberadas (política `USING (true)`, sem isolamento) — com o motivo escrito, separado da varredura genérica (D-041/D-029) | `rls-schema-guard.e2e-spec.ts` |
+| `QuoteCostType` compartilhado (`tenantId` nulo visível a todos), tenant cria seu próprio tipo (D-041) | `quote-cost-type-rls.e2e-spec.ts` |
+| RLS de `QuoteCostLine`, imutável por inteiro (`UPDATE`/`DELETE` recusados) desde a criação (D-041) | `quote-cost-line-rls.e2e-spec.ts` |
+| Caminho de custo ponta a ponta: preço final bate com as alíquotas REAIS semeadas na migração (não forjadas no teste), linhas de custo visíveis (detalhamento, não caixa preta), campos de entrada congelados mesmo depois de fechado, `DELETE` recusado, `CHECK` recusa os dois caminhos misturados (D-041) | `quote-cost-based.e2e-spec.ts` |
 | Composição de veículo (cavalo+2 carretas, truck sozinho, `CHECK` recusando inválido) | `trip-composition.e2e-spec.ts` |
 | Sequência de perna dentro do pedido (transbordo, D-037): três pernas em sequência, `sequence` duplicada no mesmo `Order` recusada, buraco na sequência aceito | `trip-sequence.e2e-spec.ts` |
 | Status interno não aparece em consulta filtrada por `isPublic` | `trip-status-visibility.e2e-spec.ts` |
@@ -205,16 +248,21 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-Auditoria de modelo (D-036) fechada — os quatro achados corrigidos: `RiskClearance`
-imutável, `CarrierPayment.netAmount` obrigatório, `CarrierHire.tollVoucher*` movido pra
-`TollVoucherPurchase`, e `Order` sem status/cancelamento resolvido em D-038
-(`OrderStatus`).
+D-041 (precificação de cotação) fechada, não commitada ainda nesta sessão: caminho de
+custo em `Quote`, `QuoteCostLine`/`QuoteCostType`, `TaxRate` com vigência,
+`QuotePricingCalculator`. Correção na mesma sessão: recomposição de imposto tinha pool
+único (ICMS+IBS+CBS todos por dentro) — errado, corrigido pra duas etapas (ICMS por
+dentro, IBS/CBS por fora). Alíquotas de ICMS semeadas como placeholder uniforme (18% em
+toda UF) — **marcado a calibrar com o contador**, e agora também **impossível de usar
+por engano fora de dev/test**: `TaxRate.isPlaceholder` + recusa em código
+(`TaxRateService`), não só comentário. Duas pendências novas registradas em
+`decisoes.md`: margem por dentro/por fora (validar com o sócio) e
+`valoresPrestacao.componentes` do CT-e (não modelado, só registrado).
 
-**`prisma migrate reset --force` desta sessão não foi executado** — bloqueado pelo
-classificador de segurança do modo automático (ação destrutiva). A migração `D-038`
-(`20260908050000_add_order_status_and_customer_reference`) foi verificada por SQL
-avulso aditivo contra o banco de dev já existente (195 testes e2e passando), não por um
-reset de verdade do zero. Pendência registrada em `decisoes.md` › Pendências › Técnicas.
+**`prisma migrate reset --force` rodado nesta sessão, com autorização pedida na hora** —
+fecha a pendência acumulada desde D-038. As 26 migrações (a 26ª, adicionada depois do
+reset, verificada por `migrate deploy` incremental) aplicaram sem erro;
+`build`/`lint`/as duas suítes (235 testes) passando.
 
 ---
 
@@ -282,7 +330,7 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (24 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (26 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
 - **`pdfkit`/`pdf-parse` instalados nesta sessão** (D-034) — mesmo `--legacy-peer-deps`
   do `nestjs-cls`, nenhuma vulnerabilidade nova no `npm audit` (as 4 de alta severidade

@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 07/09/2026 (D-040)
+Atualizado em 08/09/2026 (D-041)
 
 ---
 
@@ -1581,6 +1581,282 @@ correspondente adicionada em D-010 e D-026.
 
 ---
 
+## D-041 · Precificação de cotação: caminho de custo, alíquotas com vigência
+**Status:** Fechada · alíquota de ICMS marcada a calibrar com o contador (recusa em
+código enquanto não calibrada, não só comentário) · margem por dentro/por fora pendente
+de validação com o sócio
+
+**Por quê:** validação de campo com o sócio — dor nº 1 do operador é "cálculo de tudo,
+margem, imposto, margem de lucro". Cotação para cliente novo (sem tabela de frete) não é
+consulta, é montar preço a partir do custo, hoje na calculadora. O modelo só cobria o
+caminho de cliente com `FreightRate` fechada — a metade que não dói.
+
+### Onde ancora: `Quote`, dois caminhos mutuamente exclusivos
+
+Confirmado contra o schema antes de modelar: `Quote` já era "etapa opcional... caminho
+caso a caso é dela" (D-018), mas sempre pressupunha `FreightRate` (`freightRateId`/
+`rate`/`minimumFreight`/`additionalPercentage`/`total` todos `NOT NULL`). Os cinco viraram
+opcionais. `Order` não muda — continua só enxergando `Quote` fechada ou `FreightRate`
+direta, como já fazia.
+
+- **TABELA** (existente): `freightRateId` preenchido, valores copiados da `FreightRate`
+  no `INSERT`, imutável desde a criação — comportamento inalterado.
+- **CUSTO** (novo): `freightRateId` nulo, `marginPercentage` + `icmsUf` informados na
+  criação (`QuoteService.createCostBased`), linhas em `QuoteCostLine`.
+  `total`/`icmsRateApplied`/`ibsRateApplied`/`cbsRateApplied` só existem depois do
+  fechamento (`QuoteService.close()`).
+
+`CHECK "Quote_pricing_path_exclusive"` na migração garante que os dois caminhos nunca se
+misturam numa mesma linha — testado inclusive por fora do serviço (`admin.quote.create`
+direto), não só confiando que `QuoteService` sempre vai chamar certo.
+
+**`icmsUf`, campo novo não pedido explicitamente mas necessário:** ICMS é por UF (pedido
+explícito), e nada em `Quote` carregava UF pro caminho de custo (sem `Party`/`Lane` nessa
+tabela). Sem esse campo não dá pra escolher a linha certa de `TaxRate`.
+
+### `QuoteCostLine`/`QuoteCostType`
+
+`QuoteCostType`: tabela de domínio, `tenantId` nulo = padrão do sistema, mesmo padrão de
+`DeductionReason`/`QuoteStatus` — custo novo é `INSERT`, não migração. Semeados os cinco
+citados: `FREIGHT`/"Frete terceiro", `TOLL`/"Pedágio", `FUEL`/"Combustível",
+`INSURANCE`/"Seguro", `FEES`/"Taxas".
+
+`QuoteCostLine`: filha de `Quote`, **imutável por inteiro desde a criação** (`UPDATE`/
+`DELETE` revogados sem exceção de coluna) — mesmo critério de `PickupOrderItem`/
+`CarrierPayment`. "Congela no fechamento" fica satisfeito de graça: a linha nunca foi
+editável, então não sobra nada extra pra congelar nela — o que o fechamento congela de
+fato (alíquotas, margem já congelada desde a criação, preço) são colunas em `Quote`.
+
+**Alternativa recusada:** linha de custo editável enquanto a `Quote` estiver `OPEN`,
+travada só no fechamento (leitura possível do enunciado — "no fechamento... congelam").
+Exigiria uma regra condicionada ao status do pai, que ou vira `CHECK` capaz de enxergar
+outra tabela (não existe em Postgres) ou trigger de negócio (D-030 proíbe). Imutável desde
+sempre entrega o mesmo resultado observável sem inventar mecanismo novo.
+
+### `TaxRate`: alíquota com vigência, sem dono de tenant
+
+Mesmo mecanismo de vigência do `FreightRate` (D-014: sem isso, recotar março em setembro
+dá número diferente do cobrado em março — não é hipótese, alíquota muda por lei).
+
+**Alternativa recusada: `tenantId` nulo = padrão do sistema, igual `QuoteStatus`/
+`DeductionReason`.** Rejeitada porque não é o mesmo tipo de coisa — aquelas são domínio
+que um tenant *pode legitimamente* customizar (D-020); alíquota de tributo não é
+configuração de tenant, é lei. Dar a um tenant o poder técnico de "definir sua própria
+alíquota" é um risco de compliance que a tabela de domínio nunca teve. `TaxRate` **não tem
+`tenantId`** — RLS continua ligado (guarda de schema, D-012 exige em toda tabela), mas com
+`USING (true)` (mesmo mecanismo do `SELECT` de `Tenant.slug`, D-029). `mash_app` só tem
+`SELECT` — `INSERT`/`UPDATE`/`DELETE` revogados por inteiro: mudar alíquota é migração
+revisada, nunca escrita da aplicação. Não inventa autoridade sobre valor de lei (CLAUDE.md
+1.6) mesmo que isso feche a porta pra uma tela futura de manutenção de alíquota — não
+pedida, e o custo de abrir de novo quando pedida é baixo (é `GRANT`, não redesenho).
+
+`uf` nulo = nacional (IBS/CBS); preenchido = ICMS daquela UF — `CHECK
+"TaxRate_uf_matches_tax_type"` amarra isso no banco.
+
+Sobreposição de vigência: `EXCLUDE USING gist` (mesmo `btree_gist` já habilitado desde
+`FreightRate`) com `coalesce("uf", '')` no lugar de `uf` puro — sem isso, duas linhas de
+IBS (`uf` nulo) nunca colidiriam entre si (`EXCLUDE`, como `UNIQUE`, trata cada `NULL`
+como distinto de outro `NULL`), a mesma armadilha que `QuoteStatus`/`DeductionReason` já
+resolveram com índice parcial, aqui resolvida dentro do próprio `EXCLUDE`. Testado de
+propósito (`tax-rate-validity.e2e-spec.ts`: duas linhas de IBS sobrepostas, ambas com `uf`
+nulo, são recusadas) — não bastava confiar no comentário.
+
+### A fórmula: por dentro, aplicada em dois lugares que o pedido não escreveu
+
+O pedido travou a fórmula do ICMS (`preço = base ÷ (1 − alíquota)`, imposto entra na
+própria base) e o pipeline em 4 etapas: soma dos custos → recomposição do imposto →
+margem → preço. Duas extensões, sinalizadas ao usuário antes de escrever qualquer código
+(seção 1.6 do CLAUDE.md pesa aqui — é território de ICMS) e registradas aqui como
+**suposição a confirmar com o contador**, não fato:
+
+1. **IBS/CBS entram no mesmo "recomposição do imposto"** — é uma etapa só no pipeline,
+   não três. Pool único: `preço_com_imposto = custo ÷ (1 − icms − ibs − cbs)`.
+2. **Margem também é "por dentro"** — a única leitura que faz o teste pedido ("margem sai
+   igual à pedida depois da recomposição") ser verdade: se margem fosse markup sobre
+   custo, essa razão não bateria com a alíquota pedida.
+   `preço_final = preço_com_imposto ÷ (1 − margem)`.
+
+**Alternativa recusada:** gross-up sequencial/composto (ICMS primeiro, depois um segundo
+gross-up encadeado pra IBS/CBS, depois outro pra margem) em vez de pool único pros três
+tributos. Daria um número diferente do pool único e não tem apoio no texto do pedido — o
+pipeline descreve UMA etapa de "recomposição do imposto", não três.
+
+Toda a aritmética em `QuotePricingCalculator` (`src/quote/quote-pricing-calculator.ts`) —
+função pura, sem banco, precisão cheia em todas as etapas, arredonda só na saída (D-013;
+quem arredonda é `QuoteService.close()`, ao gravar `total`, não a função). Percentuais na
+mesma convenção de `FreightRate.additionalPercentage`: o número É a porcentagem ("18" =
+18%), não fração 0-1.
+
+### Alíquotas semeadas — o que é dado, o que é placeholder
+
+- **IBS 0,1% e CBS 0,9%** (nacional, `uf` nulo): valor dado pelo usuário, citando LC
+  214/2025, ano de calibragem 2026 — não inferido de memória fiscal.
+- **ICMS, 27 linhas (uma por UF+DF), todas com o MESMO valor: 18,0000%.** Deliberadamente
+  uniforme — não é pesquisa de 27 alíquotas reais por estado (CLAUDE.md 1.6: ICMS nunca se
+  responde de memória). Um valor uniforme deixa isso visível; 27 números diferentes
+  pareceriam pesquisados mesmo com comentário dizendo o contrário — número carrega
+  autoridade própria, independente do texto ao lado. **Marcado a calibrar com o contador**
+  antes de qualquer cotação real sair do sistema.
+
+### Congelamento
+
+`GRANT UPDATE` novo em `Quote`: `icmsRateApplied`, `ibsRateApplied`, `cbsRateApplied`,
+`total` — as quatro colunas que `close()` preenche depois do `INSERT` no caminho CUSTO.
+`freightRateId`/`rate`/`minimumFreight`/`additionalPercentage`/`marginPercentage`/
+`icmsUf` seguem fora do `GRANT`, nos dois caminhos, sempre. Mesmo padrão de
+`FreightRate.validTo`: o banco permite reescrever essas quatro colunas indefinidamente
+(não há trava contra fechar a mesma `Quote` duas vezes), disciplina de uso único é da
+aplicação — não é lacuna nova, é o mesmo risco aceito já documentado pra `Order.statusId`
+(D-038) e `FreightRate.validTo` (D-014).
+
+### `TenantPrisma.transaction()` ganhou um segundo argumento (`tenantId`)
+
+`createCostBased()` cria uma `Quote` do zero, sem nenhuma entidade-pai da qual derivar
+`tenantId` (diferente de `OrderService`, que sempre deriva de `freightRate.tenantId` ou
+`quote.tenantId`). A alternativa mais simples — `QuoteService` injetar `ClsService`
+direto, igual `TenantPrisma` faz internamente — violaria "tenantId nunca aparece no código
+de negócio" (comentário já existente em `tenant-prisma.service.ts`) abrindo um segundo
+caminho pro mesmo valor. Em vez disso, `transaction()` passou a entregar `tenantId` (que
+já calculava internamente pro `set_config`) como segundo parâmetro do callback —
+mudança aditiva, compatível com os dois call sites existentes (`OrderService`, que
+ignora o segundo parâmetro). `test/tenant-prisma-transaction-rls.e2e-spec.ts` (guarda já
+existente) continua verde sem alteração — a mudança não toca RLS.
+
+### Erros corrigidos na mesma sessão, antes de rodar a suíte
+
+- **Drift entre `_prisma_migrations` e o diretório de migrações**, herdado da sessão da
+  D-038: o `migrate dev --create-only` desta unidade recusou rodar porque a migração
+  `20260908050000_add_order_status_and_customer_reference` tinha sido renomeada de pasta
+  (sessão anterior) sem atualizar o nome/checksum gravado no banco. Corrigido com `UPDATE
+  _prisma_migrations` (nome, depois checksum recalculado) — ação aditiva/de metadado, não
+  um reset. Ver também a pendência de rodar `migrate reset --force` de verdade, abaixo.
+- **`ICMS` semeado como `0.1800` (= 0,18%) em vez de `18.0000` (= 18%)** — erro de
+  convenção: o padrão do projeto (`additionalPercentage: '2.5'` = 2,5%) guarda o número da
+  porcentagem, não uma fração 0-1, e o valor original seguia a convenção errada. Achado
+  antes de escrever qualquer teste em cima do valor (checagem cruzada contra
+  `additionalPercentage` antes de seguir), corrigido na migração e nas 27 linhas já
+  aplicadas no banco de dev, checksum recalculado de novo.
+- **`CHECK "TaxRate_uf_matches_tax_type"` foi projetado mas esquecido no arquivo da
+  migração** na primeira passada — só o comentário do `schema.prisma` chegou a mencioná-lo
+  ("CHECK na migração amarra isso"). Adicionado antes de escrever o teste que prova esse
+  CHECK, não depois.
+
+### Verificação
+
+`prisma migrate deploy` aplicou a migração `20260908060000_add_quote_pricing` (25ª) sem
+erro. 226 testes passando (9 unitários — 5 novos do `QuotePricingCalculator`, incluindo o
+caso conferido à mão custo=810/ICMS 18%+IBS 0,1%+CBS 0,9%/margem 20% fechando em preço
+final 1250 sem dízima — + 217 e2e, 22 novos: RLS de `TaxRate` sem fronteira de tenant,
+vigência/sobreposição/coalesce/lookup por data, RLS de `QuoteCostType`/`QuoteCostLine`,
+caminho de custo ponta a ponta com as alíquotas REAIS semeadas na migração (não valores
+forjados no teste), `CHECK` dos dois caminhos misturados). `npm run build` e `npm run
+lint` (`oxlint`) sem erro.
+
+**`prisma migrate reset --force` rodado com autorização explícita pedida na hora**
+(tarefa separada, não reaproveitando nenhum consentimento anterior — pendência
+acumulada desde D-038, agora fechada): as 25 migrações aplicaram limpas contra um banco
+vazio, sem erro. `prisma generate` + as duas suítes rodaram de novo depois, contra o
+banco recém-resetado: 226 testes passando, `build`/`lint` sem erro — a mesma prova que a
+verificação aditiva anterior não dava sozinha.
+
+### Correção 08/09/2026: ICMS por dentro, IBS/CBS por fora — não é pool único
+
+**A recomposição original estava errada.** A primeira versão tratava ICMS, IBS e CBS
+como um gross-up único (`custo ÷ (1 − icms − ibs − cbs)`) — os tributos da Reforma
+(IBS/CBS) **não** entram na própria base, só o ICMS entra. Corrigido pra duas etapas em
+sequência:
+
+1. **ICMS por dentro** (inalterado): `preço_com_icms = custo ÷ (1 − alíquota_icms)`.
+2. **IBS/CBS por fora** (correção): somados sobre o preço já com ICMS, sem entrar na
+   própria base — soma simples, não gross-up:
+   `preço_com_impostos = preço_com_icms + (preço_com_icms × ibs) + (preço_com_icms × cbs)`.
+
+**Por que passou despercebido:** com as alíquotas de calibragem de 2026 (IBS 0,1%/CBS
+0,9%), a diferença entre pool único e duas etapas é pequena o bastante pra não aparecer
+num teste com poucas casas decimais — exatamente por isso precisava estar certo agora,
+antes que a alíquota real (pós-calibragem, não mais teste) tornasse o erro visível só em
+produção. `QuotePricingCalculator` ganhou `priceAfterIcms` no retorno — expõe a fronteira
+entre as duas etapas, prova que rodaram na ordem certa, não misturadas.
+
+Testes recontados à mão para as duas etapas separadamente (não só o pipeline completo):
+etapa 1 isolada (base 100/ICMS 20% → 125, mesmo caso de antes), etapa 2 isolada (custo
+1000/IBS 0,1%+CBS 0,9% por fora → 1010 exato — se fosse por dentro, o resultado teria
+dízima, 1000/0,99 = 1010,101010…, a ausência de dízima é a prova de que é soma simples).
+Caso combinado recalculado: custo 820 (não mais 810 — trocado pra continuar fechando sem
+dízima em toda etapa com a fórmula corrigida) → 1000 (etapa 1) → 1010 (etapa 2) → 1262,5
+(margem 20%, etapa 3).
+
+### Pendência de validação com o sócio: margem por dentro vs por fora
+
+**Não decidido, propositalmente.** A etapa 3 (margem) continua "por dentro"
+(`preço_final = preço_com_impostos ÷ (1 − margem)`) — é a única leitura que faz o teste
+"margem sai igual à pedida" ser verdade, mas margem por dentro e margem por fora
+(markup simples, `preço_com_impostos × (1 + margem)`) produzem **números diferentes**
+pro mesmo "18%" digitado, e qual das duas o operador quer dizer quando pede uma margem
+não foi validado em campo — só a fórmula do ICMS veio travada do pedido original, a de
+margem foi inferência nossa por analogia. Registrado aqui como pendência (ver
+`Pendências › Técnicas` abaixo), não como decisão fechada: não trocar a implementação
+sem essa validação, e não tratar "por dentro" como resposta certa só porque já está
+escrito — é a implementação atual, não uma alíquota confirmada.
+
+### Placeholder de ICMS: recusa em código, não comentário
+
+**`TaxRate.isPlaceholder`** (coluna nova, migração
+`20260908070000_tax_rate_placeholder_flag`) marca as 27 linhas de ICMS semeadas como
+placeholder (`true`); IBS/CBS (dado real do usuário, LC 214/2025) nascem `false`.
+`TaxRateService.findRate()` **recusa** (lança erro, não avisa) devolver uma linha
+`isPlaceholder = true` fora de `NODE_ENV` `development`/`test` — falha fechada: `NODE_ENV`
+vazio/ausente também recusa, só `development`/`test` explícitos liberam. Escolhido recusar
+em vez de só avisar: um aviso em log pode passar despercebido, uma cotação real não pode
+sair com número inventado — "melhor dizer não sei" (CLAUDE.md, regra suprema) pesa mais
+que a conveniência de um aviso ignorável.
+
+`NODE_ENV=development` adicionado a `.env.example` — mas o risco real não é "esquecer de
+setar produção" (a recusa já falha fechada com `NODE_ENV` vazio): é o oposto, a plataforma
+gerenciada (D-005) acabar com `NODE_ENV=development` por engano de deploy ou variável
+copiada deste arquivo. Comentário no `.env.example` avisa disso explicitamente.
+
+Verificado (`tax-rate-placeholder-guard.e2e-spec.ts`): recusa com `NODE_ENV=production`,
+recusa com `NODE_ENV` ausente, aceita com `development`/`test`, IBS/CBS passam mesmo em
+`production` (não são placeholder), e confirma no banco que as 27 linhas de ICMS nascem
+`isPlaceholder=true` e IBS/CBS nascem `false`.
+
+### Guarda de schema de RLS: `TaxRate` tratada explicitamente, com o motivo escrito
+
+O teste genérico (`rls-schema-guard.e2e-spec.ts`) só provava RLS **ligado** em toda
+tabela, não que a política isola por tenant — `TaxRate` (`USING (true)`, sem fronteira
+nenhuma) passava nesse teste do mesmo jeito que uma tabela isolada de verdade, o que
+convida a ler "RLS ligado" como "isolado por tenant" incorretamente. Adicionados dois
+testes novos no mesmo arquivo, com o motivo escrito no comentário: um confirma que a
+política de `TaxRate` é exatamente `USING (true) WITH CHECK (true)` (`cmd = ALL`, não
+isolada) — se um dia virar isolada por tenant, é mudança de modelo que merece decisão
+própria, não ajuste silencioso que o teste deixaria passar; outro confirma o mesmo
+mecanismo já usado em `Tenant.slug` (D-029), pra que as duas exceções fiquem documentadas
+lado a lado, não perdidas na varredura genérica.
+
+### Observado, não construído: CT-e exige `valoresPrestacao.componentes`
+
+O CT-e não aceita só um preço total — exige o preço **decomposto em componentes
+nomeados** dentro de `valoresPrestacao.componentes` (grupo do XML/schema do CT-e), com
+destino fiscal próprio por componente. `QuoteCostLine` cobre o lado do **custo** (o que a
+transportadora gasta); falta inteiramente o lado do **preço** — como o `total` da cotação
+fechada se decompõe nos componentes que o CT-e exige, e qual vocabulário de componente
+cada linha de custo (ou de tributo) mapeia. Isso é trabalho de modelagem novo, não uma
+extensão trivial de `QuoteCostLine` — não construído nesta unidade, só registrado aqui
+pra não ser descoberto de novo do zero quando a emissão de CT-e (D-006) for construída.
+
+### Verificação (correção 08/09/2026)
+
+Migração `20260908070000_tax_rate_placeholder_flag` (26ª) aplicada sem erro — a mesma
+`prisma migrate reset --force` de antes cobre essa migração também (rodada depois dela
+existir). 235 testes passando (10 unitários — 1 novo teste de etapa isolada de IBS/CBS
+por fora, mais os já existentes recontados — + 225 e2e, 8 novos: recusa/aceita do
+placeholder em quatro combinações de `NODE_ENV`, confirmação de `isPlaceholder` no banco,
+mais os dois testes novos do guarda de RLS). `npm run build` e `npm run lint` (`oxlint`)
+sem erro.
+
+---
+
 ## Pendências
 
 ### Bloqueantes
@@ -1593,12 +1869,20 @@ correspondente adicionada em D-010 e D-026.
 - [ ] Onde entram testes automatizados, e quais primeiro
 - [ ] Defesas concretas contra degradação da base ao longo dos meses
 - [ ] Confirmar leiaute exato do grupo de vale-pedágio do MDF-e com o provedor (D-032)
-- [ ] **Rodar `prisma migrate reset --force` (D-038)** — bloqueado pelo classificador de
-      segurança do modo automático nesta sessão. A migração
-      `20260908050000_add_order_status_and_customer_reference` foi verificada por SQL
-      avulso aditivo contra o banco de dev já existente (mesmo efeito final, 195 testes
-      e2e passando), mas isso não prova que o arquivo, como escrito, aplica limpo do
-      zero — só um reset de verdade prova isso.
+- [ ] **Validar com o sócio: margem por dentro ou por fora? (D-041)** `QuotePricingCalculator`
+      hoje aplica margem por dentro (`preço ÷ (1 − margem)`) por analogia com a fórmula do
+      ICMS, não por confirmação de campo — margem por fora (markup, `preço × (1 + margem)`)
+      dá um número diferente pro mesmo percentual digitado. Não trocar a implementação sem
+      essa validação.
+- [ ] **Alíquotas de ICMS por UF — hoje placeholder uniforme (18% em toda UF), a calibrar
+      com o contador (D-041).** `TaxRate.isPlaceholder=true` nessas 27 linhas;
+      `TaxRateService` recusa usá-las fora de dev/test, então isso não é risco de vazar
+      pra produção em silêncio — mas a calibração real (por UF, de verdade) segue
+      pendente.
+- [ ] **Modelar `valoresPrestacao.componentes` do CT-e (D-041).** `QuoteCostLine` cobre o
+      custo; falta o lado do preço decomposto em componentes nomeados com destino fiscal
+      — não modelado, só registrado. Vira bloqueante quando a emissão de CT-e (D-006)
+      começar a ser construída.
 
 ### A observar no operacional
 - [ ] Coletar **todas as planilhas paralelas**, com dados reais dentro
