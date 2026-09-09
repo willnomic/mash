@@ -41,19 +41,38 @@ como "lido, não executado".
 - Grupo ICMS: situação tributária (CST), base de cálculo, alíquota, valor — nenhum
   existe. `Quote`/`Order` têm `rate`/`total` (preço), não modelam ICMS como tributo
   separado
-- Grupo IBS/CBS (reforma tributária): situação tributária, classificação tributária,
-  base de cálculo, alíquota UF + valor tributo UF, alíquota município + valor tributo
-  município, alíquota CBS + valor tributo CBS — **seis campos numéricos**, todos
-  ausentes. `TaxRate` (D-041) guarda alíquota de referência, mas não o valor calculado
-  por documento nem a base específica do CT-e
-- **Se IBS/CBS somam ao total do documento (`vTPrest`) em 2026: não confirmado por XML
-  autorizado real** (teste extra, `RESULTADO.md`) — todo CT-e com o grupo IBS/CBS
-  preenchido foi rejeitado pela SEFAZ de homologação por alíquota inválida (não sei a
-  alíquota real que essa conta de homologação valida). A resposta de negócio usada no
-  Mash (D-043: não somam durante a calibragem de 2026) vem de consulta contábil, não
-  desta API — reforça que qualquer implementação real de emissão de CT-e vai precisar
-  confirmar isso de novo, com a alíquota certa, antes de confiar no comportamento
-  observado aqui
+- Grupo IBS/CBS (reforma tributária) — **destaque comum**, campos confirmados por
+  autorização real (não é mais leitura de documentação): `ibs_cbs_situacao_tributaria`
+  (CST, obrigatório), `ibs_cbs_classificacao_tributaria` (cClassTrib, obrigatório),
+  `ibs_cbs_base_calculo`, `ibs_uf_aliquota` + `ibs_uf_valor` (parte estadual),
+  `ibs_mun_aliquota` + `ibs_mun_valor` (parte municipal), `ibs_valor_total` (soma
+  UF+Mun), `cbs_aliquota` + `cbs_valor`, **mais `valor_total_dfe`** (total do documento
+  fiscal — campo separado de `valor_total`/vTPrest, exigido pela SEFAZ assim que o grupo
+  IBS/CBS está presente, mesmo a doc marcando como opcional). `TaxRate` (D-041) guarda
+  alíquota de referência, mas não o valor calculado por documento nem a base específica
+  do CT-e.
+  **Cuidado ao implementar:** existe um segundo grupo de campos com nomes muito
+  parecidos (`ibs_aliquota_uf`, `ibs_valor_tributo_uf`, `ibs_aliquota_municipio`,
+  `ibs_valor_tributo_municipio`, `ibs_cbs_aliquota`, `cbs_valor_tributo` — ordem das
+  palavras invertida) que é do grupo de **tributação regular/compra governamental**, não
+  do destaque comum — usar o errado passa pela validação de schema mas nunca autoriza
+  (confirmado testando os dois).
+- **IBS e CBS NÃO somam ao total do documento em 2026 — confirmado por XML autorizado
+  real, comparado campo a campo contra um CT-e controle sem o grupo** (teste extra,
+  `RESULTADO.md` e `evidencias/teste-extra-ibs-cbs-diferenca.md`). Com prestação de
+  R$ 500,00 e IBS+CBS somando R$ 5,00 (0,50 + 4,50) calculados e destacados no XML,
+  `vTPrest`, `vRec` e `vTotDFe` (novo totalizador "valor total do documento fiscal", só
+  existe/só é exigido quando o grupo IBS/CBS está presente) permaneceram **os três em
+  500,00** — idênticos ao CT-e sem o grupo. A SEFAZ inclusive rejeitou uma tentativa de
+  enviar `vTotDFe = 505.00` (prestação + tributo), só aceitando `500.00` (só a
+  prestação) — a própria validação de negócio confirma a resposta. Reforça, com uma
+  segunda fonte de evidência independente da consulta contábil, a decisão já registrada
+  em `decisoes.md` D-043 (informativo/destacado, não soma, durante a calibragem 2026).
+- **Confirma a modelagem de linhas filhas por tributo (D-041):** o XML autorizado mostra
+  `gIBSCBS` com sub-grupos filhos separados por competência — `gIBSUF` (estadual) e
+  `gIBSMun` (municipal), cada um com sua própria alíquota+valor — mais `gCBS` (federal)
+  como uma terceira linha, só depois somados no totalizador `vIBS`. Não é um campo único
+  de alíquota combinada.
 
 ### Carga
 - Produto predominante, valor total da carga, quantidade (unidade de medida + tipo de

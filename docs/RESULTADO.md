@@ -290,33 +290,66 @@ autorizado — cancelamento, CC-e). Não precisei de uma chamada dedicada pra co
 
 ## Teste extra — IBS/CBS somam ao valor total do CT-e em 2026?
 
-**Inconclusivo por execução real — sem alíquota confirmada, não dá pra autorizar o CT-e
-COM IBS/CBS pra comparar.** Detalhe campo a campo, incluindo o porquê de cada tentativa
-ter falhado, em `evidencias/teste-extra-ibs-cbs-diferenca.md`. Resumo:
+**Conclusivo por execução real — refeito nesta retomada com os campos certos.** A
+primeira tentativa (sessão anterior) usou nomes de campo do grupo ERRADO do XSD —
+confirmado pelo suporte da Focus: `ibs_aliquota_uf`/`ibs_valor_tributo_uf`/
+`ibs_aliquota_municipio`/`ibs_valor_tributo_municipio`/`ibs_cbs_aliquota`/
+`cbs_valor_tributo` (tags `pAliqIBSUF`/`vTribIBSUF`/`pAliqIBSMun`/`vTribIBSMun`/
+`pAliqCBS`/`vTribCBS`) são do grupo de **tributação regular/compra governamental**, não
+do destaque comum — por isso nunca autorizava, independente da alíquota. Detalhe campo a
+campo em `evidencias/teste-extra-ibs-cbs-diferenca.md`. Resumo:
 
-- **CT-e A (SEM IBS/CBS), mesmo valor de prestação (500,00):** autorizado,
-  `status_sefaz: 100`, XML baixado (`evidencias/arquivos/extra-cte-a-sem-ibscbs.xml`).
-  `vTPrest: 500.00`, `vRec: 500.00`, nenhuma tag de IBS/CBS no XML (nunca enviado).
-- **CT-e B (COM IBS/CBS), mesmo valor de prestação:** rejeitado nas duas tentativas
-  (`ibs_aliquota_uf: 0.05`, replicando o chute da sessão anterior; depois com
-  `ibs_aliquota_municipio` também preenchido pra passar do XSD) — `status_sefaz: 316`,
-  *"Alíquota do IBS da UF inválida"*, nas duas vezes. **Rejeitado = sem XML gerado**
-  (mesmo comportamento do Teste 8) — não há nada pra comparar campo a campo contra o
-  CT-e A.
-- O grupo IBS/CBS passa pela validação de **schema** sem erro (nomes de campo
-  confirmados corretos: `ibs_cbs_situacao_tributaria`, `ibs_cbs_classificacao_tributaria`,
-  `ibs_cbs_base_calculo`, `ibs_aliquota_uf`, `ibs_valor_tributo_uf`,
-  `ibs_aliquota_municipio`, `ibs_valor_tributo_municipio`, `ibs_cbs_aliquota`,
-  `cbs_valor_tributo`) — o bloqueio é só o valor numérico da alíquota, que a SEFAZ de
-  homologação valida contra uma tabela que não tenho acesso. Não vou chutar um terceiro
-  valor sem fonte.
-- **A pergunta de negócio já tem resposta — mas de outra fonte.** Uma consulta contábil
-  real (registrada no projeto Mash, `decisoes.md` D-043) já confirmou: durante a
-  calibragem de 2026, IBS/CBS são informativos, calculados e destacados no CT-e, mas
-  **não somam** ao valor cobrado do cliente. Este teste tentou confirmar isso por uma
-  segunda via (comparar XML autorizado com/sem o grupo) e não conseguiu — a resposta de
-  negócio não muda, só não foi reforçada por uma segunda evidência de execução real
-  nesta sessão.
+**Campos corretos pro destaque comum** (confirmados no HTML bruto de
+`campos.focusnfe.com.br/cte_cteos/ConhecimentoTransporteXML.html`, salvo em
+`evidencias/extra-campos-cte-raw.html`, e no exemplo de JSON de
+`focusnfe.com.br/guides/reforma-tributaria/`, salvo em
+`evidencias/extra-reforma-tributaria-raw.html`): `ibs_cbs_situacao_tributaria` (`CST`,
+obrigatório), `ibs_cbs_classificacao_tributaria` (`cClassTrib`, obrigatório),
+`ibs_cbs_base_calculo` (`vBC`), `ibs_uf_aliquota` (`pIBSUF`), `ibs_uf_valor` (`vIBSUF`),
+`ibs_mun_aliquota` (`pIBSMun`), `ibs_mun_valor` (`vIBSMun`), `ibs_valor_total` (`vIBS`),
+`cbs_aliquota` (`pCBS`), `cbs_valor` (`vCBS`).
+
+- **CT-e A (SEM IBS/CBS), valor de prestação 500,00:** autorizado de primeira,
+  `status_sefaz: 100`, chave `...061206468055`. XML:
+  `evidencias/arquivos/extra2-cte-a-sem-ibscbs.xml`.
+- **CT-e B (COM IBS/CBS comum, campos corretos), mesmo valor de prestação:** precisou de
+  3 tentativas, as duas primeiras com achado real, não erro de campo:
+  1. Só os 8 campos comuns preenchidos → `status_sefaz: 360`, *"Total do DFe de
+     preenchimento obrigatório"*. **Achado não documentado:** existe um campo
+     `valor_total_dfe` (tag `vTotDFe`, "Valor total do documento fiscal"), listado como
+     `required: false` na doc, mas exigido de fato pela SEFAZ assim que o grupo IBS/CBS
+     está presente.
+  2. `valor_total_dfe: "505.00"` (hipótese: prestação + IBS + CBS) → `status_sefaz: 365`,
+     *"Total do DFe inválido"* — rejeitado.
+  3. `valor_total_dfe: "500.00"` (hipótese: total do documento = valor da prestação, sem
+     somar) → **autorizado**, `status_sefaz: 100`, chave `...071385491534`. XML:
+     `evidencias/arquivos/extra2-cte-b-com-ibscbs-comum.xml`.
+
+**Comparação campo a campo dos totalizadores** (XML autorizado):
+
+| Campo | CT-e A (sem) | CT-e B (com) |
+|---|---|---|
+| `vTPrest` | 500.00 | 500.00 |
+| `vRec` | 500.00 | 500.00 |
+| `vTotDFe` | *(tag ausente)* | 500.00 |
+| `vIBS` (UF 0,50 + Mun 0,00) | *(ausente)* | 0.50 |
+| `vCBS` | *(ausente)* | 4.50 |
+
+**Resposta direta, agora com XML autorizado real dos dois lados:** IBS e CBS **não
+somam** ao valor total do documento em 2026. `vTPrest`, `vRec` e `vTotDFe` são idênticos
+(500,00) com e sem o grupo — os R$ 0,50 de IBS + R$ 4,50 de CBS foram calculados,
+destacados e autorizados pela SEFAZ, mas não aparecem somados em nenhum totalizador. A
+própria validação de `vTotDFe` pela SEFAZ confirma isso: 505,00 (prestação+tributo) foi
+rejeitado, 500,00 (só a prestação) foi aceito. Confirma, agora por uma segunda fonte de
+evidência (XML real, não só consulta contábil), a resposta já registrada em
+`decisoes.md` D-043 do projeto Mash.
+
+**Confirma também a divisão de linhas filhas por tributo (D-041):** o XML mostra
+`gIBSCBS` com dois sub-grupos filhos separados — `gIBSUF` (alíquota+valor estadual) e
+`gIBSMun` (alíquota+valor municipal) — cada um com sua própria alíquota e valor, mais
+`gCBS` como uma terceira linha (federal), e só depois o totalizador `vIBS` somando UF+Mun.
+Não é um campo único de alíquota combinada — é uma linha por competência tributária,
+exatamente a modelagem que D-041 já antecipava.
 
 ---
 
@@ -353,12 +386,23 @@ ter falhado, em `evidencias/teste-extra-ibs-cbs-diferenca.md`. Resumo:
    `plan.md`: ferramenta de resumo automático não é fonte confiável pra estrutura
    aninhada de documentação — teve que ser conferida no HTML/JSON bruto pra ser
    confiável o bastante pra montar payload real.
-7. **IBS/CBS: alíquota de homologação da SEFAZ para IBS-UF não está publicada em
-   nenhuma fonte que localizei** (a alíquota nacional "0,1%" citada em
-   `focusnfe.com.br/guides/reforma-tributaria/` não é o valor que a SEFAZ de
-   homologação valida — testado, rejeitado). Bloqueia qualquer CT-e com IBS/CBS de
-   chegar a `autorizado` nesta conta de teste, o que por sua vez bloqueia comparar XML
-   autorizado com/sem o grupo (ver "Teste extra" acima).
+7. **Resolvido nesta retomada — era campo errado, não alíquota errada.** O bloqueio do
+   item 12 (`RESULTADO.md`, cadeia de correção) e da primeira tentativa do "Teste extra"
+   nunca foi a alíquota: eram nomes de campo do grupo de tributação
+   regular/compra-governamental (`ibs_aliquota_uf` etc.), não do grupo comum
+   (`ibs_uf_aliquota` etc. — nomes muito parecidos, ordem das palavras invertida, mesmo
+   assim mapeiam pra tags XSD e regras de negócio diferentes). Com os campos certos e a
+   alíquota de exemplo da própria Focus (0,1% UF + 0% Mun + 0,9% CBS), autorizou de
+   primeira (depois de resolver o campo `valor_total_dfe`, item 8 abaixo). **Achado de
+   método:** a documentação de campos (`campos.focusnfe.com.br`) tem os dois grupos
+   muito próximos um do outro no HTML/JSON embutido, com nomes quase idênticos — fácil de
+   pegar o errado sem ler o bruto com atenção total (o resumo automático de busca não
+   distinguiu os dois na primeira leitura desta sessão).
+8. **Campo `valor_total_dfe` (tag `vTotDFe`) não documentado como condicionalmente
+   obrigatório.** A doc de campos marca `required: false`, mas a SEFAZ rejeita
+   (`status_sefaz: 360`) qualquer CT-e com o grupo IBS/CBS preenchido e esse campo
+   ausente. Nem `campos.focusnfe.com.br` nem `focusnfe.com.br/guides/reforma-tributaria/`
+   deixam essa condicionalidade explícita — só a resposta real da SEFAZ revelou.
 
 Não concluo se o provedor é bom ou ruim — os itens acima são o que aconteceu, com
 evidência. A avaliação de adequação é decisão sua.
