@@ -6,6 +6,19 @@ datasource db {
   provider = "postgresql"
 }
 
+// Regime de renda do tenant (D-043, consulta tributária) — fixo por lei,
+// não enum que o tenant customiza (D-020, mesmo critério de
+// AnttCategory): determina o CST de ICMS do documento fiscal (00 normal
+// pra Presumido/Real, 90 pra Simples — não existe CSOSN no CT-e) e se
+// IBS/CBS são obrigatórios (Presumido/Real) ou facultativos em 2026
+// (Simples/MEI). Nada consome este campo em cálculo ainda — assento
+// reservado, nenhum fluxo construído (D-043 não pediu isso).
+enum IncomeTaxRegime {
+  SIMPLES_NACIONAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+}
+
 // Raiz do isolamento multi-tenant (D-012). Não carrega tenantId — o próprio
 // id é o tenant. A política de RLS compara "id" com o tenant da sessão, para
 // que uma requisição só enxergue a própria linha desta tabela.
@@ -17,6 +30,28 @@ model Tenant {
   // operador). Formato (minúsculo, sem espaço) é reforçado por CHECK no
   // banco, não só validado na aplicação.
   slug                 String                @unique @db.VarChar(63)
+  // Regime tributário (D-043) — todos nullable: nenhum tenant hoje tem
+  // isso configurado (não existe tela/fluxo de onboarding fiscal ainda),
+  // e "não configurado" é um estado honesto, diferente de assumir um
+  // regime por default.
+  incomeTaxRegime      IncomeTaxRegime?
+  // Só tem sentido quando incomeTaxRegime = SIMPLES_NACIONAL — indicador
+  // de contribuinte do Simples, campo à parte do CST (consulta
+  // tributária: "CST 90 para Simples Nacional, COM indicador de
+  // contribuinte do Simples à parte"). Nada no banco amarra isso a
+  // incomeTaxRegime — não pedido, e um CHECK cruzando os dois campos
+  // sem uso real ainda seria estrutura especulativa (CLAUDE.md seção 2).
+  isSimplesIcmsContributor Boolean?
+  // Reservado pro "Simples Híbrido" (LC 214/2025, a partir de 2027) —
+  // regime de APURAÇÃO de IBS/CBS, deliberadamente separado de
+  // incomeTaxRegime (regime de RENDA): a empresa pode ser Simples
+  // Nacional pra renda e ainda assim apurar IBS/CBS fora do DAS. Texto
+  // livre, não enum: só conheço um valor possível hoje ("Simples
+  // Híbrido") e fechar um enum de um valor só arriscaria nascer
+  // incompleto quando os outros regimes de apuração aparecerem — abrir
+  // enum depois é migração simples, é o "assento reservado" que a
+  // consulta pediu, não o fluxo.
+  ibsCbsApurationRegime String?
   createdAt            DateTime              @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime              @updatedAt @db.Timestamptz(3)
   users                User[]
@@ -50,6 +85,7 @@ model Tenant {
   boletos              Boleto[]
   receivableEvents     ReceivableEvent[]
   attachments          Attachment[]
+  ibsCbsTaxSituations  IbsCbsTaxSituation[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
@@ -515,6 +551,29 @@ enum TaxType {
   CBS
 }
 
+// Distingue as três formas de incidência de ICMS que a D-043 (consulta
+// tributária, docs/consulta-tributaria-2026-09.md) exige — só existe
+// (não nulo) quando taxType=ICMS:
+// - INTERNA: origem e destino na mesma UF — alíquota própria de cada UF
+//   (as 27 linhas já semeadas, uf preenchido).
+// - INTERESTADUAL_7 / INTERESTADUAL_12: regra do Senado — depende de
+//   GRUPO de UF de origem/destino, não do par específico (não é matriz
+//   27x27). uf é nulo nessas duas linhas — a alíquota não pertence a
+//   uma UF, pertence à combinação de grupos, resolvida em código
+//   (TaxRateService.findInterstateIcmsRate) contra uma classificação
+//   fixa por lei (Resolução do Senado — geografia constitucional, não
+//   domínio configurável por tenant, D-020: "lista fixa por lei
+//   permanece enum", mesmo critério de AnttCategory).
+// Intramunicipal (mesmo município) não é linha de TaxRate — não tem
+// vigência própria, é fronteira de competência tributária (ICMS vs.
+// ISS), não uma alíquota que a UF pode mudar por lei. Ver
+// TaxRateService.ICMS_INTRAMUNICIPAL_RATE.
+enum IcmsOperationType {
+  INTERNA
+  INTERESTADUAL_7
+  INTERESTADUAL_12
+}
+
 // Alíquota de tributo com vigência (D-041), mesmo mecanismo do
 // FreightRate (D-014): sem vigência, recotar março em setembro produz
 // número diferente do que foi cobrado em março, e alíquota muda por lei
@@ -531,23 +590,29 @@ enum TaxType {
 // de tenant nenhuma pra impor aqui. mash_app só tem SELECT (GRANT na
 // migração revoga INSERT/UPDATE/DELETE) — mudar alíquota é migração
 // revisada, nunca escrita da aplicação. Não invento autoridade sobre
-// valor de lei (CLAUDE.md 1.6): ver decisoes.md D-041 pros valores
+// valor de lei (CLAUDE.md 1.6): ver decisoes.md D-041/D-043 pros valores
 // marcados "a calibrar com o contador".
 //
-// uf nulo = nacional (IBS/CBS); preenchido = ICMS daquela UF. CHECK na
-// migração amarra isso (ICMS sempre com uf, IBS/CBS sempre sem).
+// uf: nulo = nacional (IBS/CBS) OU ICMS interestadual (a alíquota não é
+// de uma UF só, D-043); preenchido = ICMS interna daquela UF. CHECK na
+// migração amarra isso a icmsOperationType, não só a taxType — antes da
+// D-043 "uf nulo" só significava IBS/CBS; agora também pode ser ICMS
+// interestadual, e o CHECK precisa das duas colunas juntas pra
+// desambiguar.
 //
-// Sobreposição de vigência bloqueada por EXCLUDE USING gist (btree_gist,
-// já habilitado desde FreightRate) — usa coalesce(uf, '') no lugar de uf
-// puro: EXCLUDE, como UNIQUE, trata cada NULL como distinto de outro
-// NULL, então duas linhas de IBS (uf nulo) nunca colidiriam via `uf WITH
-// =` sem essa normalização — mesma armadilha de NULL que QuoteStatus/
-// DeductionReason já resolveram com índice parcial, aqui resolvida no
-// EXCLUDE.
+// composesPrice (D-043, correção — antes o pipeline somava IBS/CBS ao
+// preço incondicionalmente): durante a calibragem (2026), IBS/CBS são
+// informativos — calculados e destacados no documento, mas NÃO somam ao
+// valor cobrado do cliente (docs/consulta-tributaria-2026-09.md). A
+// etapa de cálculo continua existindo; o que muda é se o resultado entra
+// na composição do preço final, e isso tem vigência igual a alíquota —
+// por isso é coluna nesta linha, não constante no código. ICMS sempre
+// `true` (sempre esteve "por dentro" do preço, isso não mudou).
 model TaxRate {
-  id        String   @id @db.Uuid
-  taxType   TaxType
-  uf        String?  @db.Char(2)
+  id                String             @id @db.Uuid
+  taxType           TaxType
+  uf                String?            @db.Char(2)
+  icmsOperationType IcmsOperationType?
   // Escala de percentual (D-013, que já cita ICMS como exemplo textual
   // de numeric(7,4)).
   rate      Decimal  @db.Decimal(7, 4)
@@ -556,17 +621,54 @@ model TaxRate {
   validFrom DateTime @db.Date
   validTo   DateTime @db.Date
   // Marca alíquota-placeholder — valor plausível, não pesquisado, "a
-  // calibrar com o contador" (D-041). As 27 linhas de ICMS semeadas
-  // nascem `true`; IBS/CBS (dado real do usuário, LC 214/2025) nascem
-  // `false`. Um comentário na migração não impede ninguém de usar o
-  // placeholder em produção — TaxRateService.findRate() recusa devolver
-  // uma linha `isPlaceholder = true` fora de dev/test (NODE_ENV), e é
-  // essa recusa em código, não este comentário, que garante a coisa.
+  // calibrar com o contador" (D-041). As 27 linhas de ICMS interna
+  // semeadas nascem `true`; IBS/CBS e ICMS interestadual (dado real —
+  // LC 214/2025 e Resolução do Senado, D-043) nascem `false`. Um
+  // comentário na migração não impede ninguém de usar o placeholder em
+  // produção — TaxRateService.findRate() recusa devolver uma linha
+  // `isPlaceholder = true` fora de dev/test (NODE_ENV), e é essa recusa
+  // em código, não este comentário, que garante a coisa.
   isPlaceholder Boolean @default(false)
+  // D-043 — ver comentário acima do model.
+  composesPrice Boolean @default(true)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([taxType, uf])
+  @@index([taxType, icmsOperationType])
+}
+
+// Situação/classificação tributária de IBS/CBS por documento (D-043) —
+// tabela de dado, não enum: mesmo critério da D-020 (tenantId nulo =
+// padrão do sistema). A tabela oficial do Portal Nacional tem mais de
+// 160 combinações de CST+cClassTrib, atualizada por Nota Técnica — um
+// enum travaria no primeiro caso não previsto e exigiria migração pra
+// cada atualização da tabela oficial. Semeado só o caso padrão de
+// transporte rodoviário de carga tributado integralmente (CST 000 +
+// cClassTrib 000001) — não a tabela completa (pendência registrada em
+// docs/decisoes.md D-043: atualização periódica a partir do Portal
+// Nacional).
+//
+// cst/cClassTrib são os nomes literais do XML/schema do CT-e (D-007,
+// mesmo critério de Address não traduzir logradouro/município) — não
+// confundir com o CST de ICMS "clássico" (00/90), que é conceito
+// diferente e não vive nesta tabela.
+//
+// Sem FK de Quote pra cá ainda — não pedido nesta unidade. Mesma
+// pendência já registrada pra valoresPrestacao.componentes (D-041): o
+// lado do PREÇO decomposto por componente/situação fiscal ainda não foi
+// modelado, só o lado do CUSTO (QuoteCostLine) existe.
+model IbsCbsTaxSituation {
+  id        String   @id @db.Uuid
+  tenantId  String?  @db.Uuid
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  cst       String   @db.Char(3)
+  cClassTrib String  @db.Char(6)
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([tenantId, cst, cClassTrib])
 }
 
 // Pedido (D-018). branchId obrigatório: movimento é da filial (D-011) —

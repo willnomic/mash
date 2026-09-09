@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 08/09/2026 (D-042)
+Atualizado em 09/09/2026 (D-044)
 
 ---
 
@@ -1590,7 +1590,8 @@ correspondente adicionada em D-010 e D-026.
 ## D-041 · Precificação de cotação: caminho de custo, alíquotas com vigência
 **Status:** Fechada · alíquota de ICMS marcada a calibrar com o contador (recusa em
 código enquanto não calibrada, não só comentário) · margem por dentro/por fora pendente
-de validação com o sócio
+de validação com o sócio · **contém um erro corrigido em D-043** (IBS/CBS somavam ao
+preço incondicionalmente — errado durante a calibragem de 2026; ver D-043)
 
 **Por quê:** validação de campo com o sócio — dor nº 1 do operador é "cálculo de tudo,
 margem, imposto, margem de lucro". Cotação para cliente novo (sem tabela de frete) não é
@@ -2020,6 +2021,281 @@ build` e `npm run lint` (`oxlint`) sem erro.
 
 ---
 
+## D-043 · Correção da D-041 e ampliação do `TaxRate` — com base em consulta contábil
+**Status:** Fechada · corrige um **erro** da D-041 (não é atualização — o pipeline
+cobrava IBS/CBS do cliente incorretamente durante a calibragem de 2026) · alíquotas
+internas de ICMS por UF continuam placeholder, a calibrar com o contador · regime
+tributário do tenant e apuração de IBS/CBS ganham assento reservado, sem fluxo
+consumidor construído
+
+**Evidência:** texto integral da consulta contábil copiado em
+`docs/consulta-tributaria-2026-09.md` antes de qualquer alteração de código — cada
+mudança abaixo cita a seção correspondente daquele arquivo.
+
+### Erro corrigido: IBS/CBS não compõem o preço durante a calibragem (2026)
+
+A D-041 somava IBS/CBS ao preço do cliente sem condição (`priceBeforeMargin` sempre
+incluía os dois). A consulta contábil corrige: durante a calibragem (2026), IBS/CBS são
+**informativos** — calculados, destacados no documento, mas **não entram na cobrança**.
+ICMS/ISS seguem dedutíveis da própria base de IBS/CBS até 2032; só depois disso os
+tributos novos passam a compor preço de fato.
+
+**Correção:** `TaxRate.composesPrice` (coluna nova, `Boolean @default(true)`,
+`prisma/schema.prisma:633`) — se a linha de alíquota compõe preço vira **parâmetro com
+vigência**, não constante no código. As linhas de IBS/CBS semeadas nesta migração nascem
+`composesPrice=false`. `QuotePricingCalculator`
+(`src/quote/quote-pricing-calculator.ts`) sempre **calcula** `ibsAmount`/`cbsAmount`
+(o destaque no documento não muda) mas só soma ao preço quando o parâmetro é
+`true` — `.plus(input.ibsComposesPrice ? ibsAmount : new Decimal(0))`.
+
+**Prova pedida explicitamente no pedido — número conferido à mão:** custo 820, ICMS 18%
+por dentro → 1000; margem 20% por dentro → 1250. Com `composesPrice=true` para IBS/CBS
+(0,1%+0,9%) o preço subiria pra 1262,5 (`quote-pricing-calculator.spec.ts`); com
+`composesPrice=false` (o caso real de 2026) o preço fica em 1250 — **idêntico** ao caso
+sem IBS/CBS nenhum, provando que "ligar" ou "desligar" o parâmetro em 2026 não muda o
+preço cobrado do cliente, só o que aparece destacado no documento. Recomputado também
+ponta a ponta contra o banco real (`test/quote-cost-based.e2e-spec.ts:95`: `total` = 1250,
+não mais 1262,5).
+
+### Gross-up não é universal — os dois caminhos não chamam a mesma função
+
+`preço = base ÷ (1 − alíquota)` só vale quando o ponto de partida é um valor de custo a
+recompor (caminho CUSTO da D-041). Quando o preço já é o valor combinado (caminho TABELA,
+`FreightRate`), a base é o próprio valor e o tributo só é **multiplicado**, nunca
+recompõe a base — dividir aqui infla o preço além do combinado, erro oposto ao de
+IBS/CBS acima.
+
+Confirmado que os dois caminhos não compartilham a mesma função: `close()` do caminho
+CUSTO chama `calculateQuotePricing` (gross-up); o caminho TABELA nunca chamou —
+`FreightRate` já grava valor final direto, sem recomposição nenhuma (D-041, inalterado).
+Para deixar essa separação impossível de confundir por engano futuro, o caminho de
+"tributo sobre valor já acordado" ganhou função própria,
+`calculateTaxOnAgreedValue` (`src/tax-rate/tax-composition-calculator.ts`) — pura
+multiplicação, `finalPrice === value` sempre. **Não foi ligada a nenhum caminho de
+produção** (nenhum dos dois caminhos hoje precisa dela de fato — `FreightRate` já é
+valor final sem destaque de tributo); existe só como o lugar certo pra esse cálculo
+quando for pedido, evitando que alguém reuse `calculateQuotePricing` (gross-up) por
+analogia errada. `test/tax-composition-calculator.spec.ts` prova a matemática **e**,
+via leitura do código-fonte de `quote.service.ts`, que ele importa `calculateQuotePricing`
+e não importa `calculateTaxOnAgreedValue` — não é só convenção em comentário.
+
+### `TaxRate` ganha os três casos de ICMS — sem matriz 27×27
+
+A consulta descreve três operações de ICMS com regras de alíquota inteiramente
+diferentes; o modelo anterior (D-041) só cobria "ICMS por UF", implicitamente a interna.
+
+- **Interna** (`icmsOperationType: 'INTERNA'`) — origem e destino na mesma UF, alíquota
+  por UF (17-22%, varia por lei estadual). Continua exigindo `uf` preenchido e
+  **continua placeholder** (`isPlaceholder=true`) — a consulta não trouxe as 27 alíquotas
+  reais, e não seria apropriado inventá-las (CLAUDE.md 1.6). O guard de
+  `TaxRateService.findRate()` que recusa placeholder fora de dev/test (D-041) segue
+  intacto e agora escopado só às linhas `INTERNA` — `IBS`/`CBS` e as duas linhas
+  interestaduais abaixo não são placeholder (dado real da consulta), então não podem
+  mais ser varridas pela mesma checagem "toda linha de ICMS é placeholder"; o teste que
+  provava isso foi re-escopado (`tax-rate-placeholder-guard.e2e-spec.ts`).
+- **Interestadual** (`icmsOperationType: 'INTERESTADUAL_7'`/`'INTERESTADUAL_12'`, `uf`
+  nulo) — regra da Resolução do Senado: 7% quando origem é Sul/Sudeste **exceto ES** e
+  destino é Norte/Nordeste/Centro-Oeste/ES; 12% em qualquer outro par origem/destino.
+  Modelado como **grupo de UF**, não matriz: `SUL_SUDESTE_EXCETO_ES` (constante
+  `Set<string>` — geografia fixa por lei, mesmo critério que mantém listas fixas como
+  enum/constante em vez de tabela, D-020) em
+  `src/tax-rate/tax-rate.service.ts:24`; `findInterstateIcmsRate()`
+  (`tax-rate.service.ts:92`) testa pertencimento nos dois lados, não indexa uma tabela
+  27×27. As duas linhas (7%/12%) nascem `isPlaceholder=false` — vieram da consulta, não
+  são chute. Vigência partilha a mesma `EXCLUDE USING gist` de sobreposição já usada
+  desde D-041, agora particionada também por `icmsOperationType` (sem isso, a linha
+  `INTERNA` de uma UF colidiria com as duas interestaduais, todas de `taxType=ICMS`).
+- **Intramunicipal** (mesmo município origem/destino) — **sem ICMS**. Não é linha de
+  `TaxRate` (não tem vigência própria, é fronteira de competência tributária estrutural,
+  ISS e não ICMS): constante `ICMS_INTRAMUNICIPAL_RATE = new Prisma.Decimal(0)`
+  (`tax-rate.service.ts:15`).
+
+`CHECK "TaxRate_icms_operation_type_required"` (ICMS exige `icmsOperationType`; IBS/CBS
+exigem nulo) e `CHECK "TaxRate_uf_matches_operation_type"` (INTERNA exige `uf`;
+interestadual exige `uf` nulo) — os dois testados por `tax-rate-validity.e2e-spec.ts`.
+
+**Erro achado e corrigido antes de commitar, registrado aqui porque é o tipo de bug que
+falha em silêncio:** a primeira versão do segundo CHECK escreveu
+`("icmsOperationType" = 'INTERNA' AND "uf" IS NOT NULL) OR (...) OR ("icmsOperationType"
+IS NULL AND "uf" IS NULL)` sem guarda explícita de `IS NOT NULL` nos dois primeiros
+ramos. Quando `icmsOperationType` é `NULL` (caso de uma linha IBS/CBS mal formada com
+`uf` preenchido por engano), a comparação `"icmsOperationType" = 'INTERNA'` avalia pra
+`NULL`, não `FALSE` — e `NULL OR FALSE OR FALSE` também é `NULL`. Postgres trata `CHECK`
+que avalia `NULL` como **satisfeito**, não violado — a lógica de três valores do SQL
+deixando passar exatamente o caso que o CHECK existia pra barrar. Achado por um teste
+que esperava rejeição e via sucesso (`recusa IBS/CBS com uf preenchido`), confirmado por
+INSERT isolado direto no banco (bypassando Prisma) e por `\d+ "TaxRate"` (descartando
+divergência de deploy). Corrigido adicionando `"icmsOperationType" IS NOT NULL AND` como
+guarda nos dois primeiros ramos, forçando avaliação `FALSE` definitiva em vez de
+propagação de `NULL`. Migração e banco de dev corrigidos juntos, checksum recalculado
+(mesmo padrão já usado em D-041 pra bug em migração da mesma sessão, ainda não
+commitada).
+
+### Regime tributário do tenant — assento reservado, fluxo não construído
+
+CST de ICMS é `00` (regime normal, Presumido/Real) ou `90` (Simples Nacional, com
+indicador de contribuinte separado) — não existe CSOSN em CT-e. Empresa do Simples ainda
+recolhe ICMS **fora do DAS** em transporte intermunicipal/interestadual (só o
+intramunicipal entra no DAS); IBS/CBS são obrigatórios pra Presumido/Real e opcionais
+pra Simples/MEI em 2026; a partir de 2027 o "Simples Híbrido" (LC 214/2025) permite
+apurar IBS/CBS fora do DAS — regime de apuração de IBS/CBS é, portanto, campo
+**separado** do regime de imposto de renda.
+
+**"Reserva o assento, não constrói o fluxo"** (instrução explícita do pedido): `Tenant`
+ganhou três colunas, todas nullable, nenhuma consumida por lógica de negócio ainda —
+`incomeTaxRegime IncomeTaxRegime?` (enum novo, `SIMPLES_NACIONAL`/`LUCRO_PRESUMIDO`/
+`LUCRO_REAL` — fixo por lei, não domínio de tenant, D-020), `isSimplesIcmsContributor
+Boolean?`, `ibsCbsApurationRegime String?` (`prisma/schema.prisma:37,44,54`).
+`ibsCbsApurationRegime` é string livre, não enum — decisão pedida ao usuário
+explicitamente (não fechar uma lista de regimes de apuração ainda incompleta; abrir enum
+depois é migração simples quando os outros regimes aparecerem). Testado só que o campo
+nasce nulo e aceita ser preenchido (`tenant-rls.e2e-spec.ts:84`) — nenhum serviço lê ou
+decide com base neles ainda.
+
+### `IbsCbsTaxSituation` — CST/`cClassTrib` como tabela de domínio, não constante
+
+CST + `cClassTrib` do CT-e não é par fixo: o caso padrão de transporte rodoviário de
+carga totalmente tributado é `000`/`000001`, mas a tabela oficial tem mais de 160
+combinações, atualizada por Nota Técnica periódica — o oposto de uma constante de
+código. Modelado como tabela de domínio (`prisma/schema.prisma:661`), mesmo critério de
+`QuoteCostType` (D-041): `tenantId` nulo = padrão do sistema, RLS permite leitura de
+qualquer tenant nas linhas `tenantId IS NULL` e escrita das próprias — diferente de
+`TaxRate`, que a D-041 rejeitou como domínio por ser lei, não escolha do tenant; aqui o
+critério que se aplica é o oposto: um tenant pode legitimamente precisar de um código
+que o sistema não semeou. Semeada **só** a linha padrão (`000`/`000001`, "Tributação
+integral — transporte rodoviário de carga") — as demais ~160 não são inventadas.
+
+**Pendência registrada** (não resolvida aqui): a tabela oficial do Portal Nacional muda
+por Nota Técnica — não há mecanismo de atualização periódica automática, ver
+`Pendências › Técnicas` abaixo.
+
+### Registrado, não construído: crédito presumido de 20% (Convênio ICMS 106/96)
+
+A consulta é explícita: o crédito presumido de 20% é benefício de **nível de apuração**
+(mensal, na conta corrente fiscal da transportadora) — não altera o `vICMS` destacado no
+CT-e em si, é opção do contribuinte, substitutiva de outros créditos, e não se aplica a
+transporte aéreo. **Não é campo de documento fiscal.** Registrado aqui explicitamente
+como fora do escopo de `TaxRate`/CT-e, pra não ser reintroduzido por engano numa sessão
+futura como se fosse alíquota do documento.
+
+### Desvio de processo: migração já aplicada foi editada, não substituída por migração nova
+
+**Registrado como desvio, não como padrão a repetir.** Ao corrigir o `CHECK
+"TaxRate_uf_matches_operation_type"` (bug de lógica de três valores descrito acima), a
+correção foi aplicada **editando o arquivo da migração `20260909000000_...` já aplicada**
+no banco de dev, com o `DROP`/`ADD CONSTRAINT` corrigido também rodado direto contra o
+banco e o checksum em `_prisma_migrations` **regravado manualmente** (`UPDATE` via
+`psql`) pra fazer o hash bater com o arquivo editado de novo.
+
+Isso contorna a proteção do próprio Prisma Migrate: o checksum gravado existe
+exatamente pra detectar quando o arquivo de uma migração já aplicada foi alterado depois
+do fato — reescrever o checksum manualmente apaga esse sinal. **A regra correta,
+sempre, é: migração aplicada não se edita — corrige-se com uma migração nova**, mesmo
+que a nova seja só `ALTER TABLE ... DROP CONSTRAINT ... ADD CONSTRAINT ...` de duas
+linhas.
+
+**Por que foi aceito aqui, uma vez, sem repetir:** a migração `20260909000000` era desta
+mesma sessão, ainda não commitada, e o bug foi achado por teste antes de qualquer commit
+existir — não havia, em nenhum momento, uma migração "publicada" (commitada, ou aplicada
+em qualquer banco além do de dev local) rodando com o CHECK errado. Editar o arquivo
+manteve a migração da sessão como uma unidade só, em vez de deixar um `CHECK` errado
+seguido de um `ALTER` corretivo dois minutos depois no histórico — mas isso não
+generaliza: se a migração já tivesse sido commitada, ou aplicada em qualquer banco
+compartilhado, a correção teria que ser uma migração nova, sem exceção.
+
+**Prova exigida e obtida antes de fechar esta decisão:** `npx prisma migrate reset
+--force` (autorização explícita do usuário, na hora, banco de dev local sem dado real —
+não reaproveitando consentimento de sessão anterior) — as 28 migrações aplicaram limpas
+contra um banco vazio, na ordem, com o arquivo exatamente como está escrito hoje. Prova
+que o checksum regravado manualmente **de fato corresponde** ao conteúdo real do arquivo
+(a regravação manual, por si, não garante isso — só o reset do zero prova). `prisma
+generate` + as duas suítes rodaram de novo depois, contra o banco recém-resetado: 286
+testes passando (22 unitários + 264 e2e), `build`/`lint` sem erro — mesma prova de novo
+que a verificação aditiva (aplicar sobre um banco já em uso) não dava sozinha, mesmo
+critério já registrado em D-041 pra situação parecida.
+
+### Verificação
+
+Migração `20260909000000_tax_correction_and_expansion` (28ª): `IcmsOperationType`
+(enum), `TaxRate.icmsOperationType`/`composesPrice`, `IbsCbsTaxSituation` (RLS +
+índice único parcial + seed), `IncomeTaxRegime` (enum), três colunas novas em `Tenant`,
+dois `CHECK` novos em `TaxRate` (o segundo corrigido antes de commitar, ver acima),
+`EXCLUDE` de vigência recriado particionado por `icmsOperationType` (usando `CASE`
+literal em vez de `coalesce(col::text, '')` — o cast de enum pra texto dentro de índice
+funcional quebra com "functions in index expression must be marked IMMUTABLE", achado
+por reprodução isolada contra o banco antes de aplicar na migração real), duas linhas de
+ICMS interestadual semeadas (7%/12%, `isPlaceholder=false`), backfill de
+`composesPrice=false` nas linhas IBS/CBS existentes e `icmsOperationType='INTERNA'` nas
+27 linhas de ICMS existentes. Aplicada sem erro contra o banco de dev — inclusive via
+`prisma migrate reset --force` do zero (ver desvio de processo acima), não só de forma
+aditiva sobre um banco já em uso.
+
+286 testes passando (`npm test`: 5 arquivos/22 unitários + `npm run test:e2e`: 55
+arquivos/264 e2e — 60 arquivos, todos verdes), **confirmado duas vezes**: uma vez
+aditivamente logo após a correção do `CHECK`, outra vez do zero depois do `migrate reset
+--force`. `npm run build` e `npm run lint` (`oxlint`) sem erro nas duas rodadas.
+
+---
+
+## D-044 · Avaliação de provedor de documento fiscal — Focus NFe escolhida
+**Status:** Fechada (escolha de provedor) · integração/adaptador **não construído** —
+D-006 segue não iniciada; MDF-e da avaliação **não concluído** (pendência registrada
+acima)
+
+**Evidência:** teste real em ambiente de homologação, não leitura de material de venda
+do provedor. Detalhe completo, requisição/resposta crua de cada chamada, em
+`docs/RESULTADO.md` e `docs/CAMPOS-FALTANTES-MASH.md` (copiados de uma avaliação
+dedicada, `C:\focus-nfe-eval`, pra dentro do projeto — são a especificação do futuro
+adaptador de CT-e/MDF-e, não só um relatório de avaliação).
+
+**Confirmado por execução real contra a Focus NFe:**
+- Idempotência por `ref`: reenviar a mesma referência não duplica documento — nem em
+  sequência (já autorizado → `409`), nem em condição de corrida real (duas chamadas
+  paralelas → uma `202`, outra `422 pending_operation`, nunca as duas autorizando).
+- Recuperação após timeout: uma emissão abortada do lado do cliente (`curl --max-time`)
+  continuou processando no servidor — consultando só pelo `ref` que a própria aplicação
+  gerou (nenhum ID do provedor) dá pra recuperar o destino real do documento.
+- Numeração explícita é respeitada: `numero` enviado pela aplicação sai exatamente como
+  enviado; aceita salto na sequência (sem validação de contiguidade); recusa
+  duplicidade só contra número **já autorizado** — rejeição não consome o número
+  (reenvio com o mesmo `numero` depois de uma rejeição autoriza normalmente).
+- XML autorizado vem com o protocolo de autorização **embutido no próprio arquivo**
+  (`cteProc` contém `CTe` e `protCTe` juntos) — confirmado abrindo o XML baixado, não só
+  pela presença do campo na resposta JSON.
+
+**Achado de negócio não documentado, achado por execução:** cancelamento de CT-e é
+**vedado** se já existir uma carta de correção (CC-e) no mesmo documento — regra real da
+SEFAZ, não encontrada em nenhuma página lida antes de executar. Se o Mash modelar "pode
+cancelar" como pergunta simples, essa regra precisa entrar.
+
+**Mensagem de rejeição vem crua da SEFAZ** (`status_sefaz` + `mensagem_sefaz` com o
+texto oficial, ex. "Rejeicao: Data de Emissao muito atrasada") — não traduzida nem
+parafraseada pela Focus. Uma tela que mostrar isso ao operador precisa decidir se
+traduz/explica ou repassa cru.
+
+**Alternativas descartadas, com motivo:**
+- **Nuvem Fiscal** — empresa desativada em 31/07/2026. Fora de cogitação, não é questão
+  de comparação técnica.
+- **PlugNotas** — não cobre CT-e. Elimina de saída pra este caso de uso (transporte de
+  carga lotação depende de CT-e/MDF-e, não é NF-e de venda de mercadoria).
+
+**Por quê:** D-006 (emissão de CT-e/MDF-e via provedor terceirizado) precisava de
+provedor real escolhido antes de desenhar o adaptador — sem isso, qualquer modelagem de
+`CTe`/`MDFe` no schema seria feita às cegas sobre um layout de campo que "parece"
+razoável em vez de confirmado. CLAUDE.md 1.6 pesa aqui: layout de campo de documento
+fiscal se lê na documentação do provedor (e se testa contra ela), não se deduz.
+
+**Consequência:** quando D-006 for construída, o adaptador de CT-e/MDF-e é contra a
+Focus NFe — `docs/CAMPOS-FALTANTES-MASH.md` já é o inventário de campos que faltam no
+schema atual pra isso, `docs/RESULTADO.md` já documenta o comportamento real da API
+(idempotência, numeração, eventos, arquivos). **Nada disso constrói o adaptador agora**
+— é a base pra quando construir. MDF-e continua com uma lacuna real não resolvida (o
+campo do veículo de tração não foi localizado na documentação pública de campos, nem a
+alíquota de IBS-UF que a SEFAZ de homologação valida) — perguntas enviadas ao suporte da
+Focus, aguardando resposta (pendência registrada abaixo).
+
+---
+
 ## Pendências
 
 ### Bloqueantes
@@ -2037,11 +2313,41 @@ build` e `npm run lint` (`oxlint`) sem erro.
       ICMS, não por confirmação de campo — margem por fora (markup, `preço × (1 + margem)`)
       dá um número diferente pro mesmo percentual digitado. Não trocar a implementação sem
       essa validação.
-- [ ] **Alíquotas de ICMS por UF — hoje placeholder uniforme (18% em toda UF), a calibrar
-      com o contador (D-041).** `TaxRate.isPlaceholder=true` nessas 27 linhas;
-      `TaxRateService` recusa usá-las fora de dev/test, então isso não é risco de vazar
-      pra produção em silêncio — mas a calibração real (por UF, de verdade) segue
-      pendente.
+- [ ] **Janela de tempo em linguagem natural — não é `timestamptz` nem `date`, é intervalo
+      com precisão declarada.** "Pela manhã", "primeira hora", "08h às 10h" são a
+      realidade da operação — cada forma tem uma precisão diferente (período do dia /
+      ordem relativa / horário exato), e nenhuma cabe direto num tipo de data do banco.
+      `PickupOrder.pickupWindow` (D-034, `backend/prisma/schema.prisma`) já imprime
+      "janela de coleta" hoje como texto livre (`String?`), sem esse tipo modelado por
+      trás. **Decidir antes da primeira tela** — a ordem de coleta já existe, e telas
+      futuras (agendamento em terminal, follow-up) herdam a decisão errada se ela nascer
+      improvisada numa tela específica em vez de pensada aqui.
+- [ ] **Prazo limite da carga não tem campo — nem `Order`, nem `Trip`.** É o dado que
+      define o prazo de emissão do CT-e (precisa emitir antes do prazo vencer), e hoje
+      não existe em lugar nenhum do modelo.
+- [ ] **Faturamento em `Order` com transbordo (D-037): confirmar se fica pronto pra
+      faturar com canhoto de TODAS as pernas, ou só da última.** D-042 já decidiu que o
+      canhoto ancora em `Trip`, não em `Order` (prova de entrega é evento por perna) —
+      mas não decidiu a regra de quando o `Order` inteiro está pronto pra gerar fatura
+      quando tem mais de uma `Trip`.
+- [ ] **MDF-e e alíquota de IBS/CBS em homologação — perguntas enviadas ao suporte da
+      Focus NFe, aguardando resposta.** Ver `docs/RESULTADO.md` (avaliação do provedor,
+      D-044): o campo do veículo de tração do MDF-e não foi localizado na documentação
+      pública de campos, e a alíquota de IBS-UF que a SEFAZ de homologação valida não é a
+      alíquota nacional publicada (0,1%) — testado, rejeitado. Bloqueia terminar a
+      avaliação de MDF-e e confirmar por execução real (XML autorizado) se IBS/CBS somam
+      ao total do CT-e em 2026.
+- [ ] **Alíquotas de ICMS interna por UF — hoje placeholder uniforme (18% em toda UF), a
+      calibrar com o contador (D-041, escopo restrito a `icmsOperationType='INTERNA'`
+      desde D-043).** `TaxRate.isPlaceholder=true` nessas 27 linhas; `TaxRateService`
+      recusa usá-las fora de dev/test, então isso não é risco de vazar pra produção em
+      silêncio — mas a calibração real (por UF, de verdade) segue pendente. As duas
+      linhas de ICMS interestadual (7%/12%) e IBS/CBS **não** são placeholder — vieram
+      da consulta contábil (D-043).
+- [ ] **Atualização periódica da tabela `IbsCbsTaxSituation` (CST/`cClassTrib`, D-043).**
+      Semeado só o caso padrão (`000`/`000001`); a tabela oficial do Portal Nacional tem
+      mais de 160 combinações, atualizada por Nota Técnica — sem mecanismo de
+      atualização automática, é acompanhamento manual.
 - [ ] **Modelar `valoresPrestacao.componentes` do CT-e (D-041).** `QuoteCostLine` cobre o
       custo; falta o lado do preço decomposto em componentes nomeados com destino fiscal
       — não modelado, só registrado. Vira bloqueante quando a emissão de CT-e (D-006)

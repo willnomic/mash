@@ -3,7 +3,7 @@
 Base de contexto do projeto. Afirma o estado atual.
 Decisões técnicas ficam em `decisoes.md`.
 
-Atualizado em 02/09/2026
+Atualizado em 09/09/2026
 
 ---
 
@@ -24,6 +24,12 @@ Isto tem sustentação de campo, não é hipótese: nas transportadoras observad
 operacional trabalha em **várias instâncias simultâneas** — TMS próprio, emissor
 fiscal separado, rastreamento de veículo e planilhas paralelas. Precisa dominar cada
 uma e executar um pedaço em cada lugar. A dor relatada é **simplicidade e fluxo**.
+
+**Validação de campo (sócio): a fragmentação mais forte não é entre sistemas, é entre
+PESSOAS da mesma empresa.** Cada operador mantém a própria planilha, sem consolidação
+nenhuma entre eles — o dono não tem visão do conjunto até alguém puxar tudo à mão. É
+argumento mais forte que o de sistemas fragmentados (acima), porque é venda pro **dono**
+da transportadora, não só pro operador que sente a dor no dia a dia.
 
 **Consequência:** o Mash Core não é encanamento, é o produto. Login único, navegação
 única, cadastros que não se repetem entre módulos, terminologia consistente — é
@@ -107,6 +113,10 @@ CT-e. Um TMS de carga fracionada — com romaneio, transferência entre filiais,
 cross-docking, rateio por nota, tabela por peso/cubagem/faixa de CEP — é cerca de 4x
 o trabalho. Lotação primeiro; os demais perfis herdam a base.
 
+**Existe uma fatia portuária no perfil desse cliente-alvo** — contêiner, devolução de
+vazio, free time — fora do escopo da v1 de lotação rodoviária pura. Registrada como
+v1.1, junto com agendamento em terminal (D-039).
+
 ### O que o mercado mostra
 
 Os TMS estabelecidos (TOTVS, ESL, Brudam, Senior, Benner) atendem fracionada **e**
@@ -117,6 +127,16 @@ configuração.
 Especialização é posição de mercado comprovada, não consolo: Vertti e Atua (nstech)
 vendem TMS focado em lotação e commodities do agronegócio; Soloplan faz o mesmo para
 granel.
+
+**O concorrente real, não o genérico — registrado sem suavizar, porque muda a pergunta
+de venda.** Na transportadora observada em campo, o sistema em uso é **nstech Bsoft**,
+com o fiscal **já integrado**: mensagem de rejeição vem com código, suporte é por
+telefone. Não é o "sistema datado" que o argumento de mercado acima descreve em geral —
+Bsoft já resolveu boa parte do que dói. A fragmentação que sobra ali é outra: planilha
+própria por operador (sem consolidação, ver acima), portal de terminal portuário,
+gerenciadora de risco, aplicativo do banco pra cobrança. A venda não pode ser "seu
+sistema é velho, troque" — precisa ser "seu sistema cobre o fiscal, mas essa
+fragmentação específica continua sua dor".
 
 **Conclusão:** os dois perfis são o destino, e a arquitetura modular já garante isso.
 A v1 especializada é vendável de verdade, não rascunho.

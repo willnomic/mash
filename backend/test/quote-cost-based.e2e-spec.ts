@@ -67,9 +67,12 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
     // Custo total 820 — mesmo caso conferido à mão do
     // quote-pricing-calculator.spec.ts (fecha sem dízima em toda etapa):
     // etapa 1, ICMS 18% por dentro (São Paulo, semente da migração):
-    // 820 / 0.82 = 1000. etapa 2, IBS 0,1% + CBS 0,9% por fora (soma
-    // simples sobre 1000, NÃO gross-up): 1000 + 1 + 9 = 1010. etapa 3,
-    // margem 20% por dentro: 1010 / 0.80 = 1262.5.
+    // 820 / 0.82 = 1000. etapa 2, IBS 0,1% + CBS 0,9% — calculados
+    // (destacados), mas NÃO somados ao preço: TaxRate.composesPrice é
+    // false pras linhas de IBS/CBS semeadas (D-043, correção — durante a
+    // calibragem de 2026 são informativos, consulta tributária). Preço
+    // antes da margem continua 1000, não 1010. etapa 3, margem 20% por
+    // dentro: 1000 / 0.80 = 1250.
     const quote = await quoteService.createCostBased({
       icmsUf: 'SP',
       marginPercentage: '20',
@@ -88,7 +91,8 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
     expect(closed.icmsRateApplied?.toString()).toBe('18');
     expect(closed.ibsRateApplied?.toString()).toBe('0.1');
     expect(closed.cbsRateApplied?.toString()).toBe('0.9');
-    expect(closed.total?.toString()).toBe('1262.5');
+    // D-043: 1250, não 1262.5 — IBS/CBS não compõem o preço em 2026.
+    expect(closed.total?.toString()).toBe('1250');
   });
 
   it('linhas de custo ficam gravadas e visíveis — detalhamento, não caixa preta', async () => {

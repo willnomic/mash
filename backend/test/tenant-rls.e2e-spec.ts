@@ -80,4 +80,30 @@ describe('Tenant · Row-Level Security (D-012, exceção de leitura em D-029)', 
       }),
     ).rejects.toThrow();
   });
+
+  it('D-043 — regime tributário nasce nulo (assento reservado, não configurado) e aceita ser preenchido', async () => {
+    // "Reservar o assento, não construir o fluxo" — nenhum tenant tem
+    // isso configurado hoje, e "não configurado" precisa ser um estado
+    // válido, não um default assumido.
+    expect(tenantA.name).toBeTruthy(); // sanity, tenantA já criado sem os campos
+    const freshFromDb = await base.tenant.findUniqueOrThrow({
+      where: { id: tenantA.id },
+    });
+    expect(freshFromDb.incomeTaxRegime).toBeNull();
+    expect(freshFromDb.isSimplesIcmsContributor).toBeNull();
+    expect(freshFromDb.ibsCbsApurationRegime).toBeNull();
+
+    const updated = await forTenant(tenantA.id).tenant.update({
+      where: { id: tenantA.id },
+      data: {
+        incomeTaxRegime: 'SIMPLES_NACIONAL',
+        isSimplesIcmsContributor: true,
+        ibsCbsApurationRegime: 'Simples Híbrido',
+      },
+    });
+
+    expect(updated.incomeTaxRegime).toBe('SIMPLES_NACIONAL');
+    expect(updated.isSimplesIcmsContributor).toBe(true);
+    expect(updated.ibsCbsApurationRegime).toBe('Simples Híbrido');
+  });
 });

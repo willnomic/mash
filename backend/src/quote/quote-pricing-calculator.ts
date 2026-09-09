@@ -10,11 +10,20 @@ export interface QuotePricingCostLineInput {
 // Percentuais na mesma convenção de FreightRate.additionalPercentage
 // (D-013): o número É a porcentagem ("18" = 18%, "0.1" = 0,1%), não uma
 // fração 0-1 — dividimos por 100 aqui dentro, uma vez só.
+//
+// ibsComposesPrice/cbsComposesPrice (D-043, correção): vêm de
+// TaxRate.composesPrice — durante a calibragem (2026) são `false`
+// (consulta tributária, docs/consulta-tributaria-2026-09.md: "IBS e CBS
+// são informativos... NÃO somam ao valor cobrado do cliente"). Sem
+// parâmetro pra ICMS: ele sempre compõe o preço (sempre esteve "por
+// dentro"), isso não mudou e não tem vigência que altere esse fato.
 export interface QuotePricingInput {
   costLines: QuotePricingCostLineInput[];
   icmsRatePercent: Decimal | string;
   ibsRatePercent: Decimal | string;
+  ibsComposesPrice: boolean;
   cbsRatePercent: Decimal | string;
+  cbsComposesPrice: boolean;
   marginRatePercent: Decimal | string;
 }
 
@@ -61,8 +70,17 @@ export interface QuotePricingResult {
 //   preço_com_icms = custo ÷ (1 − alíquota_icms)
 //
 // Etapa 2 — IBS/CBS "por fora": somados em cima do preço já com ICMS,
-// SEM entrar na própria base (não é gross-up, é acréscimo simples).
-//   preço_com_impostos = preço_com_icms + (preço_com_icms × ibs) + (preço_com_icms × cbs)
+// SEM entrar na própria base (não é gross-up, é acréscimo simples) — MAS
+// só se ibsComposesPrice/cbsComposesPrice disserem que sim (D-043,
+// correção). O valor de cada tributo é sempre calculado e devolvido
+// (destaque no documento, "a etapa continua existindo e produzindo os
+// valores" — consulta tributária) — o que muda é se ele entra na conta
+// do preço final. Em 2026, ibsComposesPrice/cbsComposesPrice vêm `false`
+// da vigência de TaxRate: os dois são somados como zero na composição,
+// mas ibsAmount/cbsAmount no retorno continuam com o valor calculado.
+//   preço_com_impostos = preço_com_icms
+//     + (ibsComposesPrice ? preço_com_icms × ibs : 0)
+//     + (cbsComposesPrice ? preço_com_icms × cbs : 0)
 //
 // Etapa 3 — margem "por dentro": só isso é premissa nossa, não dado
 // fornecido feito o ICMS. É a leitura que faz "margem sai igual à pedida
@@ -90,10 +108,14 @@ export function calculateQuotePricing(
   const priceAfterIcms = costSubtotal.dividedBy(new Decimal(1).minus(icmsRate));
   const icmsAmount = priceAfterIcms.minus(costSubtotal);
 
-  // Etapa 2 — IBS/CBS por fora, sobre o preço já com ICMS.
+  // Etapa 2 — IBS/CBS por fora, sobre o preço já com ICMS. Sempre
+  // calculados (destaque no documento) — só entram na composição do
+  // preço se a vigência disser que compõem (D-043).
   const ibsAmount = priceAfterIcms.times(ibsRate);
   const cbsAmount = priceAfterIcms.times(cbsRate);
-  const priceBeforeMargin = priceAfterIcms.plus(ibsAmount).plus(cbsAmount);
+  const priceBeforeMargin = priceAfterIcms
+    .plus(input.ibsComposesPrice ? ibsAmount : new Decimal(0))
+    .plus(input.cbsComposesPrice ? cbsAmount : new Decimal(0));
   const taxAmount = priceBeforeMargin.minus(costSubtotal);
 
   // Etapa 3 — margem (por dentro — ver pendência de validação acima).
@@ -115,8 +137,17 @@ export function calculateQuotePricing(
     breakdown: [
       { label: 'Custo', amount: costSubtotal },
       { label: 'ICMS', amount: icmsAmount },
-      { label: 'IBS', amount: ibsAmount },
-      { label: 'CBS', amount: cbsAmount },
+      {
+        // D-043: rótulo avisa quando o valor é só destaque — sem isso,
+        // uma linha "IBS: R$ 4,50" no detalhamento parece ter sido
+        // somada ao preço, quando na calibragem de 2026 não foi.
+        label: input.ibsComposesPrice ? 'IBS' : 'IBS (informativo, não compõe o preço)',
+        amount: ibsAmount,
+      },
+      {
+        label: input.cbsComposesPrice ? 'CBS' : 'CBS (informativo, não compõe o preço)',
+        amount: cbsAmount,
+      },
       { label: 'Margem', amount: marginAmount },
       { label: 'Preço final', amount: finalPrice },
     ],

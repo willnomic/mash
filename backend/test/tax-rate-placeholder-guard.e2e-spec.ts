@@ -71,15 +71,29 @@ describe('TaxRateService · recusa alíquota placeholder fora de dev/test (D-041
     expect(cbs.isPlaceholder).toBe(false);
   });
 
-  it('confirma no banco que as 27 linhas de ICMS nascem isPlaceholder=true e IBS/CBS nascem false', async () => {
-    const icmsRates = await admin.taxRate.findMany({ where: { taxType: 'ICMS' } });
+  it('confirma no banco que as 27 linhas de ICMS interna nascem isPlaceholder=true e IBS/CBS nascem false', async () => {
+    const icmsInternaRates = await admin.taxRate.findMany({
+      where: { taxType: 'ICMS', icmsOperationType: 'INTERNA' },
+    });
     const otherRates = await admin.taxRate.findMany({
       where: { taxType: { in: ['IBS', 'CBS'] } },
     });
 
-    expect(icmsRates.length).toBeGreaterThan(0);
-    expect(icmsRates.every((r) => r.isPlaceholder)).toBe(true);
+    expect(icmsInternaRates.length).toBeGreaterThan(0);
+    expect(icmsInternaRates.every((r) => r.isPlaceholder)).toBe(true);
     expect(otherRates.length).toBeGreaterThan(0);
     expect(otherRates.every((r) => !r.isPlaceholder)).toBe(true);
+  });
+
+  it('D-043 — confirma no banco que ICMS interestadual (7%/12%) NÃO é placeholder — veio da consulta tributária, não é chute uniforme', async () => {
+    const interstateRates = await admin.taxRate.findMany({
+      where: {
+        taxType: 'ICMS',
+        icmsOperationType: { in: ['INTERESTADUAL_7', 'INTERESTADUAL_12'] },
+      },
+    });
+
+    expect(interstateRates).toHaveLength(2);
+    expect(interstateRates.every((r) => !r.isPlaceholder)).toBe(true);
   });
 });

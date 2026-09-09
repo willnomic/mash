@@ -150,7 +150,14 @@ export class QuoteService {
         costLines: costLines.map((line) => ({ amount: line.amount })),
         icmsRatePercent: icmsRate.rate,
         ibsRatePercent: ibsRate.rate,
+        // D-043: vem da vigência da própria linha de TaxRate, não de
+        // constante no código — durante a calibragem (2026) as linhas
+        // de IBS/CBS nascem com composesPrice=false (migração
+        // 20260909000000), então esses dois ficam false aqui também,
+        // sem precisar de lógica nova nesta chamada.
+        ibsComposesPrice: ibsRate.composesPrice,
         cbsRatePercent: cbsRate.rate,
+        cbsComposesPrice: cbsRate.composesPrice,
         marginRatePercent: quote.marginPercentage,
       });
 
