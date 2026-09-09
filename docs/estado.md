@@ -4,9 +4,9 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 08/09/2026, commit `6030be9` (D-034 a D-040 já em `master`) + trabalho não
-commitado desta sessão: D-041 (precificação de cotação — caminho de custo em `Quote`,
-`QuoteCostLine`/`QuoteCostType`, `TaxRate` com vigência, `QuotePricingCalculator`).
+Atualizado em 08/09/2026, commit `bb9578a` (D-034 a D-041 já em `master`) + trabalho não
+commitado desta sessão: D-042 (faturamento e contas a receber — revisa D-025: `Invoice`/
+`Boleto`/`ReceivableEvent`/`Attachment`, `Order.invoiceId`, `Party.invoicingPreference`).
 
 ---
 
@@ -182,6 +182,38 @@ D-019)
   pagamento que desfaz (`CHECK` nos dois sentidos + índice único parcial contra
   estorno duplicado), migração `20260905001110_carrier_payment_reversal_link`
 
+**Financeiro — contas a receber** (`Invoice`, `Boleto`, `ReceivableEvent`, `Attachment`,
+D-042, revisa D-025)
+- `Invoice`: ancora em `Order` (não CT-e, que não existe — `Trip` não carrega valor
+  nenhum, só `Order.total`, D-014; ratear entre viagens seria inventar contorno pela
+  ausência do CT-e). Sem `InvoiceLine`: `Order.invoiceId` direto (evidência é 1:N, não
+  N:N) — `GRANT UPDATE` novo em `invoiceId`, mesmo mecanismo de `statusId` (D-038). Sem
+  status, sem total — "quanto falta receber" deriva de `SUM(order.total)` menos
+  `ReceivableEvent`. `number` via `DocumentCounter` (`BusinessDocumentType` ganha
+  `INVOICE`, aditivo). Imutável por inteiro — nenhum `UPDATE` liberado
+- `Boleto`: registro do boleto emitido no banco da transportadora (D-042 reverte a
+  direção da D-025 — emitir por provedor trocaria a conta em que o dinheiro do cliente
+  cai, objeção comercial). Número, vencimento, valor, linha digitável; PDF via
+  `Attachment`. 1:N com `Invoice` (mesmo critério de `TollVoucherPurchase`/D-036: barato
+  1:N agora, caro retrofitar depois). Imutável por inteiro
+- `ReceivableEvent`: livro append-only, espelha `CarrierPayment` (D-032) do outro lado
+  do caixa — `PAYMENT`/`REVERSAL` só (menor que `CarrierPayment`, sem
+  `ADVANCE`/`DEDUCTION` — não evidenciados do lado do recebível).
+  `reversesReceivableEventId` com `CHECK` nos dois sentidos + índice único parcial,
+  mecanismo idêntico ao de `CarrierPayment`. Saldo nunca é coluna, sempre `SUM`
+  sinalizado. Imutável por inteiro
+- `Attachment`: metadado de anexo (canhoto — gatilho do faturamento — e PDF de boleto),
+  decisão nova. `ownerType`(`TRIP`/`BOLETO`)+`ownerId` polimórfico, sem FK (D-030, RLS é
+  o único guarda, sem segunda camada de autorização); `type` é dimensão separada
+  (`PROOF_OF_DELIVERY`/`BOLETO_PDF`). Storage: Cloudflare R2 (decidido pelo usuário,
+  não escolhido sozinho) — **integração real (upload/URL assinada) não construída**,
+  sem bucket/credencial pra testar contra algo de verdade; `objectKey` é só metadado
+  hoje. Append-only
+- `Party.invoicingPreference`: texto livre, opcional — evidência de campo não sustenta
+  taxonomia de ciclo de faturamento, só um campo pra anotar a preferência
+- Sem serviço/controller pras quatro tabelas — mesmo padrão já aceito de
+  `CarrierHire`/`CarrierPayment` (modelo e teste, sem serviço, até existir uso real)
+
 **Endpoints HTTP hoje:** quatro — `GET /` (público), `POST /auth/login` (público),
 `GET /me/users` (protegido, exemplo mínimo de wiring), `GET /pickup-orders/:id/pdf`
 (protegido, gera o PDF sob demanda — D-034). `Quote`/`Order`/`Trip` têm serviço
@@ -193,7 +225,7 @@ serviço sem controller nem entidade própria além de `DocumentCounter` — con
 
 ---
 
-## Testes: 235 passando (10 unitários + 225 e2e), zero mock de banco
+## Testes: 267 passando (14 unitários + 253 e2e), zero mock de banco
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -241,6 +273,11 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | RLS de `DocumentCounter` | `document-counter-rls.e2e-spec.ts` |
 | Numeração (D-015): sequencial em criações sucessivas; unicidade de `(tenantId, branchId, number)` garantida no banco; `DocumentCounter` libera só `UPDATE` de `lastNumber`, `DELETE` recusado; rollback depois de pegar o número não desperdiça o número (reaproveitado na próxima criação real); **concorrência real** — 10 criações simultâneas via `Promise.all` produzem 10 números distintos sem buraco, com contenção de lock observada de verdade em `pg_stat_activity` (não só resultado correto por acaso) | `order-numbering.e2e-spec.ts` |
 | Guarda: `TenantPrisma.transaction()` continua protegido por RLS (D-012, D-035) — leitura via `tx.<model>` e via `tx.$queryRaw` não vazam tenant, escrita no tenant alheio recusada, duas `transaction()` concorrentes de tenants diferentes não se misturam, e o contexto de tenant não vaza pra próxima conexão do pool depois que a transação termina | `tenant-prisma-transaction-rls.e2e-spec.ts` |
+| RLS de `Invoice`, `UPDATE`/`DELETE` recusados (nenhuma coluna liberada), `Order.invoiceId` alcançável a partir do pedido (D-038/D-042) | `invoice-rls.e2e-spec.ts` |
+| RLS de `Boleto`, mais de um boleto por fatura aceito (1:N), valor zero/negativo recusado, `UPDATE`/`DELETE` recusados (D-042) | `boleto-rls.e2e-spec.ts` |
+| RLS de `ReceivableEvent`, valor zero/negativo recusado, `CHECK` amarra `REVERSAL`↔`reversesReceivableEventId` nos dois sentidos, duplo estorno recusado, `UPDATE`/`DELETE` recusados, saldo por `SUM` de eventos com e sem estorno (D-042) | `receivable-event-rls.e2e-spec.ts` |
+| RLS de `Attachment`, "download" de outro tenant recusado na consulta que qualquer URL assinada futura precisaria fazer primeiro, dois `ownerType` diferentes (`TRIP`/`BOLETO`) aceitos, `UPDATE`/`DELETE` recusados (D-042) | `attachment-rls.e2e-spec.ts` |
+| Decimal (unitário — sem banco): operador nativo concatena, `.plus()`/`.minus()` somam/subtraem certo na soma sinalizada de `ReceivableEvent` (PAYMENT soma, REVERSAL desfaz), D-013 (D-042) | `receivable-decimal.spec.ts` |
 
 Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
@@ -248,21 +285,24 @@ Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
 
 ## Em andamento
 
-D-041 (precificação de cotação) fechada, não commitada ainda nesta sessão: caminho de
-custo em `Quote`, `QuoteCostLine`/`QuoteCostType`, `TaxRate` com vigência,
-`QuotePricingCalculator`. Correção na mesma sessão: recomposição de imposto tinha pool
-único (ICMS+IBS+CBS todos por dentro) — errado, corrigido pra duas etapas (ICMS por
-dentro, IBS/CBS por fora). Alíquotas de ICMS semeadas como placeholder uniforme (18% em
-toda UF) — **marcado a calibrar com o contador**, e agora também **impossível de usar
-por engano fora de dev/test**: `TaxRate.isPlaceholder` + recusa em código
-(`TaxRateService`), não só comentário. Duas pendências novas registradas em
-`decisoes.md`: margem por dentro/por fora (validar com o sócio) e
-`valoresPrestacao.componentes` do CT-e (não modelado, só registrado).
+D-042 (faturamento e contas a receber, revisa D-025) modelada, testada e verificada
+(`build`/`lint`/as duas suítes, 267 testes) — **não commitada ainda**. A sessão anterior
+foi interrompida por limite de uso no meio da atualização deste arquivo (`Construído` já
+refletia D-042, `Testes`/`Em andamento`/`Próximo`/contagem de migração ainda não —
+corrigido nesta sessão, sem mudança de código).
 
-**`prisma migrate reset --force` rodado nesta sessão, com autorização pedida na hora** —
-fecha a pendência acumulada desde D-038. As 26 migrações (a 26ª, adicionada depois do
-reset, verificada por `migrate deploy` incremental) aplicaram sem erro;
-`build`/`lint`/as duas suítes (235 testes) passando.
+**Duas decisões de modelo pendentes de revisão do usuário antes do commit** (levantadas
+explicitamente, ainda não resolvidas):
+
+1. `Attachment` polimórfico sem FK (`ownerType`+`ownerId`) — ver D-042 em `decisoes.md`
+   pro raciocínio original (Postgres não tem FK que aponte pra "uma linha dentre várias
+   tabelas possíveis" sem uma tabela de referência global que não existe aqui).
+2. Canhoto ancorado em `Trip`, sendo que o faturamento é do `Order` e um `Order` pode ter
+   várias `Trip` (transbordo, D-037) — ver D-042 pro raciocínio original (prova de
+   entrega é evento por perna, não por pedido).
+
+Não mudar nenhum dos dois sem confirmar com o usuário primeiro — a essa altura são só a
+justificativa registrada, não uma decisão validada de novo.
 
 ---
 
@@ -273,8 +313,12 @@ Dentro do escopo v1 (D-028), ainda faltam:
 - CT-e e MDF-e — emissão via provedor (D-006), importação de XML de NF-e (D-024)
 - Averbação (D-023) — depende de saber se a AT&M tem API (pendência bloqueante em
   `decisoes.md`)
-- Fatura, contas a receber (D-025) — pagamento a terceiro já modelado (`CarrierHire`/
-  `CarrierPayment`, D-019), falta serviço/controller
+- Fatura e contas a receber (D-042, revisa D-025) — modelo e teste prontos
+  (`Invoice`/`Boleto`/`ReceivableEvent`/`Attachment`), falta: serviço/controller,
+  integração real de storage (Cloudflare R2 — upload/URL assinada), e as duas decisões
+  de modelo em revisão (ver `Em andamento`)
+- Pagamento a terceiro (`CarrierHire`/`CarrierPayment`, D-019) — modelo pronto, falta
+  serviço/controller
 - Qualquer frontend — zero tela construída até aqui
 
 ---
@@ -330,7 +374,7 @@ Dentro do escopo v1 (D-028), ainda faltam:
   Precisa ser copiado manualmente (`cp .env.example .env`) antes de `prisma generate` ou
   dos testes; os valores são dev-only e já coincidem com `docker-compose.yml`.
 - **Volume do Postgres local não sobrevive à perda do `.git`** (é local, fora do
-  controle de versão). Banco novo exige `npx prisma migrate deploy` (26 migrações) antes
+  controle de versão). Banco novo exige `npx prisma migrate deploy` (27 migrações) antes
   da suíte e2e — sem isso os testes falham por schema ausente, não por RLS.
 - **`pdfkit`/`pdf-parse` instalados nesta sessão** (D-034) — mesmo `--legacy-peer-deps`
   do `nestjs-cls`, nenhuma vulnerabilidade nova no `npm audit` (as 4 de alta severidade

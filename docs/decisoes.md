@@ -4,7 +4,7 @@ Uma decisão por bloco. Contexto do projeto em `contexto.md`.
 
 **Status possíveis:** `Fechada` · `Assento reservado` · `Em aberto` · `Revogada`
 
-Atualizado em 08/09/2026 (D-041)
+Atualizado em 08/09/2026 (D-042)
 
 ---
 
@@ -649,7 +649,7 @@ forte candidata a diferencial percebido.
 ---
 
 ## D-025 · Faturamento
-**Status:** Fechada · fatura entra, boleto fica
+**Status:** Revogada por D-042 (08/09/2026) — ver abaixo
 
 **Fatura agrupa vários CT-e**, não é um a um. Entra na v1 com contas a receber básico.
 
@@ -661,6 +661,12 @@ pagar, faturamento atrasado.
 **Quando entrar, entra por API de provedor moderno** (Asaas, Cora, Iugu): emissão por
 HTTP, confirmação por webhook, sem arquivo posicional. Reduz semanas de bug financeiro a
 alguns dias de integração.
+
+**Revisão 08/09/2026 (D-042):** validação de campo com o sócio contradisse as duas
+premissas acima — fatura não é mensal (sai logo após a entrega) e boleto não vem de
+provedor terceiro (sai do banco da própria transportadora). Ambas as premissas eram
+suposição, não evidência, no momento em que esta decisão foi escrita. Conteúdo mantido
+abaixo por histórico; D-042 é quem vale.
 
 ---
 
@@ -1857,6 +1863,163 @@ sem erro.
 
 ---
 
+## D-042 · Faturamento e contas a receber — revisa D-025
+**Status:** Fechada · integração de storage (upload/URL assinada) e serviço/controller
+não construídos, próximo passo natural
+
+**Revisa D-025 por completo.** Validação de campo com o sócio contradisse as duas
+premissas que a D-025 tinha assumido sem confirmar:
+
+- **Fatura não é mensal.** Sai logo após a entrega — o gatilho é o envio ao cliente da
+  foto do canhoto assinado, por e-mail, junto com o boleto e o CT-e, na mesma thread.
+- **Boleto não sai de provedor terceiro.** Sai direto do banco da própria
+  transportadora, com tarifa já negociada e conta que já existe.
+- Cobrança de atraso hoje é o aplicativo do banco (lista vencidos/a vencer); financeiro
+  concilia por número de processo e cobra por e-mail, na mesma thread.
+- Uma fatura por cliente — o agrupamento é definido pelo CLIENTE, não pela
+  transportadora, cada um exige um formato de envio.
+
+### Onde ancora: `Order`, não CT-e (que ainda não existe), não `Trip`
+
+Confirmado contra o schema antes de modelar: `Trip` não carrega nenhum valor — só
+`Order.total` existe como preço congelado (D-014). `Order` 1:N `Trip` (transbordo,
+D-037) significa que ancorar a fatura em `Trip` exigiria ratear `Order.total` entre
+viagens — isso sim seria inventar contorno pela ausência do CT-e (o que foi
+explicitamente pedido pra não fazer). `Order` já carrega `total` e `customerReference`
+(D-038, o eixo — pedido nº 5 desta unidade). Quando o CT-e for construído (D-018 já
+prevê 1:1 com `Trip`), entra como referência opcional, sem reabrir este desenho.
+
+**Sem `InvoiceLine`/tabela de junção.** Evidência é 1 `Order` pertence a no máximo 1
+`Invoice` (não N:N) — a FK fica direto em `Order.invoiceId`, uma tabela a menos
+(CLAUDE.md seção 2/3.4: tabela nova é último recurso). `GRANT UPDATE` novo em
+`invoiceId`, mesmo mecanismo de coluna de `statusId` (D-038).
+
+**O canhoto ancora diferente: em `Trip`, não em `Order`.** Prova de entrega é evento por
+entrega física — cada `Trip` tem seu próprio destino (D-018), então cada uma tem seu
+próprio canhoto. Intencional, não inconsistência com o parágrafo acima: fatura cobra
+pelo pedido, canhoto prova a entrega da perna.
+
+### 1. Boleto: registro entra, emissão fica (reverte a direção da D-025)
+
+Emitir por provedor (Asaas/Cora/Iugu) trocaria a conta em que o dinheiro do cliente cai
+— objeção comercial, não técnica, e não vale arriscar o piloto por ela. Mesmo padrão de
+D-006 (fiscal via provedor)/D-019 (CIOT)/D-023 (gerenciadora)/D-039 (terminal): o que
+mata a planilha paralela é o REGISTRO, não a integração.
+
+`Boleto`: número, vencimento (`Date`, D-016), valor (`Decimal(14,2)`, D-013), linha
+digitável (texto livre — layout varia por banco, seção 1.6 não sustenta `CHECK` de
+formato). PDF via `Attachment` genérica (`ownerType=BOLETO`), não campo próprio.
+
+1:N com `Invoice`, não 1:1 — mesmo critério de `TollVoucherPurchase` (D-036): barato
+modelar 1:N mesmo achando raro mais de um boleto por fatura, caro retrofitar depois com
+dado real dentro. Imutável por inteiro (`UPDATE`/`DELETE` revogados) — corrigir é linha
+nova, mesmo critério de `PickupOrderItem`.
+
+**Consequência assumida e declarada:** o operador ainda gera o boleto no próprio banco;
+o Mash só registra depois. Mesma consequência já aceita em D-019 pro CIOT.
+
+### 2. `ReceivableEvent`: livro de eventos append-only, espelha `CarrierPayment` (D-032)
+
+Nunca coluna de saldo, nunca coluna de status — "quanto falta receber" é sempre
+`SUM(order.total)` dos pedidos da fatura menos `SUM` sinalizado dos eventos, derivado em
+consulta. `UPDATE`/`DELETE` revogados por inteiro (não `GRANT` de coluna): nenhuma
+coluna muda legitimamente depois de criada — mesmo critério exato de `CarrierPayment`,
+não o de `FreightRate`/`Quote`/`CarrierHire` (que têm coluna liberada porque algo ali
+muda de propósito depois da criação).
+
+**Tipo menor que o de `CarrierPayment`, de propósito:** só `PAYMENT`/`REVERSAL`, sem
+`ADVANCE`/`DEDUCTION` — a validação fala de conciliar pagamento e cobrar atraso, não de
+adiantamento nem desconto negociado do lado do recebível. Não inventar taxonomia que a
+evidência não pede.
+
+`reversesReceivableEventId` amarra `REVERSAL` ao evento que desfaz — `CHECK` nos dois
+sentidos e índice único parcial contra estorno duplicado, mecanismo idêntico ao
+`CarrierPayment.reversesPaymentId` (D-032/correção 05/09/2026), sem reinventar.
+
+**Por que nasce como livro de eventos mesmo com boleto registrado manualmente:** quando
+a emissão por API entrar (a D-025 original, agora fora de escopo, não descartada — só
+adiada), ela vira só mais um consumidor do MESMO livro, não uma migração de dado
+financeiro. O desenho não muda quando a integração chegar.
+
+### 3. `Attachment`: decisão nova — nada no sistema fazia isso antes
+
+Canhoto é o GATILHO do faturamento — sem ele, não fatura. Não se regenera (diferente do
+PDF de `PickupOrder`/D-034, gerado sob demanda, nunca gravado, e do XML fiscal, texto
+pequeno que cabe no Postgres): é foto de celular, ~500/mês por transportadora, binário
+grande demais pro banco de aplicação.
+
+**Storage de objeto: Cloudflare R2**, decidido pelo usuário depois de eu apresentar três
+opções (não escolhido sozinho, como pedido) — API compatível com S3 (mesmo SDK/código
+de uma eventual migração pra S3 real), custo de armazenamento baixo (~US$0,015/GB/mês) e
+**zero custo de egress**, o que importa quando o download passar a ser frequente (ex.:
+portal do embarcador, D-010, quando o cliente puder baixar o próprio canhoto). Nem
+Railway nem Render (D-005) tem produto de object storage próprio — a escolha independe
+de qual dos dois for fechado.
+
+**Não construído nesta unidade: a integração real** (upload, geração de URL assinada de
+download). Sem bucket/credencial pra testar contra algo de verdade, código de integração
+seria inventado, não verificado (CLAUDE.md 1.4) — contra o próprio princípio que rege
+este projeto. `objectKey` é só o texto opaco que quem subir o arquivo vai escrever; a
+tabela de metadado não sabe nem precisa saber o formato da chave. Fica pra quando a
+credencial existir.
+
+`ownerType`+`ownerId` é referência **polimórfica, sem FK** — Postgres não tem FK que
+aponte pra "uma linha dentre várias tabelas possíveis" sem uma tabela de referência
+global que não existe aqui (criar uma só pra isso seria estrutura que ninguém pediu).
+Validar que `ownerId` existe de verdade e pertence ao tenant é regra de aplicação
+(D-030), mesmo critério já aceito em `PickupOrder.addressId`. `type` é dimensão separada
+de `ownerType` de propósito — a mesma entidade dona pode um dia ganhar um segundo tipo de
+anexo (ex.: foto de avaria em `Trip`) sem tabela nova.
+
+**RLS continua sendo o único guarda** (pedido explícito) — sem segunda camada de
+autorização agora. Já nasce no formato que a D-010 vai precisar quando o embarcador
+puder baixar o próprio canhoto, mas nenhuma tela nem segunda autorização é construída
+aqui. Append-only: `UPDATE`/`DELETE` revogados por inteiro.
+
+### 4. Agrupamento definido pelo cliente: campo mínimo, não taxonomia
+
+`Party.invoicingPreference` — texto livre, opcional. Evidência ("cada cliente exige um
+formato de envio") não sustenta uma estrutura de ciclo (semanal/mensal/por volume/etc) —
+só um lugar pra anotar a preferência. Alternativa recusada: enum ou tabela de domínio de
+"ciclo de faturamento" — inventaria taxonomia que a validação não pediu (CLAUDE.md seção
+2).
+
+### 5. Número de processo é o eixo
+
+`Order.customerReference` (D-038) já existe com índice GIN trigram (D-038) — nada novo
+construído aqui, só confirmado que fatura (`Order.invoiceId`), cobrança
+(`ReceivableEvent` via `invoice.orders`) e canhoto (`Attachment` via `order.trips[]`)
+seguem alcançáveis a partir dele, um ou dois `include` de distância. Testado em
+`invoice-rls.e2e-spec.ts`.
+
+### O que não foi construído (por pedido explícito)
+
+Emissão de boleto, CNAB, integração bancária, conciliação automática de pagamento,
+qualquer tela, envio de e-mail, régua de cobrança automática — nenhum dos seis. Também
+não construído, por decisão desta sessão (não do pedido original): serviço/controller de
+`Invoice`/`Boleto`/`ReceivableEvent`/`Attachment` — mesmo padrão já aceito pra
+`CarrierHire`/`CarrierPayment` (D-032: modelo e teste, sem serviço, até existir uso real
+que peça um) — e a integração de storage real (ver seção 3 acima).
+
+### Migração e verificação
+
+Migração `20260908080000_add_invoicing` (27ª): `Party.invoicingPreference`,
+`Order.invoiceId` (+ `GRANT UPDATE`), `BusinessDocumentType` ganha `INVOICE` (aditivo,
+`ALTER TYPE ... ADD VALUE`, já antecipado desde D-015/D-035), `Invoice`/`Boleto`/
+`ReceivableEvent`/`Attachment` com RLS padrão (D-012), `CHECK`s de estorno e valor
+positivo, índice único parcial contra duplo estorno. Aplicada sem erro contra o banco de
+dev.
+
+267 testes passando (14 unitários — 4 novos, `.plus()`/`.minus()` na soma sinalizada de
+`ReceivableEvent` — + 253 e2e, 39 novos: RLS/imutabilidade de `Invoice`/`Boleto`/
+`ReceivableEvent`/`Attachment`, `CHECK` de estorno nos dois sentidos, duplo estorno
+recusado, valor zero/negativo recusado, saldo por `SUM` com e sem estorno, "download" de
+outro tenant recusado na consulta que qualquer geração futura de URL assinada
+precisaria fazer primeiro, dois `ownerType` diferentes de anexo aceitos). `npm run
+build` e `npm run lint` (`oxlint`) sem erro.
+
+---
+
 ## Pendências
 
 ### Bloqueantes
@@ -1883,6 +2046,14 @@ sem erro.
       custo; falta o lado do preço decomposto em componentes nomeados com destino fiscal
       — não modelado, só registrado. Vira bloqueante quando a emissão de CT-e (D-006)
       começar a ser construída.
+- [ ] **Integração real de storage (Cloudflare R2) pros anexos (D-042).** Bucket/
+      credencial não existem ainda — `Attachment.objectKey` é só metadado hoje, sem
+      upload nem geração de URL assinada de download implementados. Bloqueia o operador
+      de fato anexar um canhoto pelo sistema.
+- [ ] **Serviço/controller de `Invoice`/`Boleto`/`ReceivableEvent` (D-042).** Modelo e
+      teste existem (mesmo padrão já aceito pra `CarrierHire`/`CarrierPayment`), mas
+      ninguém consegue criar fatura/registrar boleto/pagamento fora de teste ainda —
+      falta a camada de aplicação.
 
 ### A observar no operacional
 - [ ] Coletar **todas as planilhas paralelas**, com dados reais dentro

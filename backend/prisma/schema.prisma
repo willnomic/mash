@@ -46,6 +46,10 @@ model Tenant {
   carrierProfiles      CarrierProfile[]
   pickupOrders         PickupOrder[]
   pickupOrderItems     PickupOrderItem[]
+  invoices             Invoice[]
+  boletos              Boleto[]
+  receivableEvents     ReceivableEvent[]
+  attachments          Attachment[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
@@ -65,6 +69,7 @@ model Branch {
   occurrences      Occurrence[]
   pickupOrders     PickupOrder[]
   documentCounters DocumentCounter[]
+  invoices         Invoice[]
 
   @@index([tenantId])
 }
@@ -92,6 +97,8 @@ model User {
   active       Boolean  @default(true)
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+  // Anexos que este usuário enviou (D-042) — "quem enviou" do metadado.
+  uploadedAttachments Attachment[]
 
   @@unique([tenantId, email])
   @@index([tenantId, active])
@@ -131,6 +138,12 @@ model Party {
   // Inscrição estadual: texto livre, sem formato validado — varia por UF e
   // inclui "ISENTO". Não modelar regra de obrigatoriedade sem fonte.
   ie                       String?
+  // Preferência de faturamento (D-042) — texto livre, opcional. Evidência
+  // de campo: "o agrupamento de CT-e é definido pelo cliente, cada um
+  // exige um formato de envio" — não sustenta uma taxonomia de ciclo
+  // (semanal/mensal/etc), só um campo onde anotar a preferência. Não
+  // inventar estrutura que a evidência não pede (seção 1.6/CLAUDE.md 2).
+  invoicingPreference      String?
   // Cadastro nunca tem hard delete (D-017): inativar é estado, não remoção.
   active                   Boolean         @default(true)
   createdAt                DateTime        @default(now()) @db.Timestamptz(3)
@@ -153,6 +166,8 @@ model Party {
   // no Vehicle significa frota própria, então essa lista só existe para
   // Party que é proprietária de terceiro.
   ownedVehicles            Vehicle[]       @relation("VehicleOwner")
+  // Faturas em que esta Party é o tomador cobrado (D-042).
+  invoices                 Invoice[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnpj])
@@ -647,10 +662,19 @@ model Order {
   minimumFreight       Decimal     @db.Decimal(14, 2)
   additionalPercentage Decimal     @db.Decimal(7, 4)
   total                Decimal     @db.Decimal(14, 2)
-  // Único campo que legitimamente muda depois da criação (D-038) — nasce
-  // "em andamento", único UPDATE liberado a mash_app é este + updatedAt.
+  // Único campo que legitimamente mudava depois da criação até D-042 —
+  // nasce "em andamento", UPDATE liberado a mash_app.
   statusId             String      @db.Uuid
   status               OrderStatus @relation(fields: [statusId], references: [id])
+  // Fatura que agrupa este pedido (D-042) — nulo até ser faturado. Sem
+  // tabela de junção: evidência é 1 Order pertence a no máximo 1 Invoice,
+  // não N:N (CLAUDE.md 2, sem estrutura que ninguém pediu). GRANT UPDATE
+  // por coluna, mesmo mecanismo de statusId — banco permite reatribuir
+  // indefinidamente (mesmo risco já aceito em statusId/D-038 e
+  // FreightRate.validTo/D-014: disciplina de uso é da aplicação, não
+  // travada em CHECK que precisaria enxergar o valor anterior).
+  invoiceId            String?     @db.Uuid
+  invoice              Invoice?    @relation(fields: [invoiceId], references: [id])
   createdAt            DateTime    @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime    @updatedAt @db.Timestamptz(3)
   trips                Trip[]
@@ -658,6 +682,7 @@ model Order {
   @@unique([tenantId, branchId, number])
   @@index([tenantId, branchId])
   @@index([tenantId, statusId])
+  @@index([tenantId, invoiceId])
 }
 
 // Lista de domínio em tabela, não enum (D-020) — mesmo padrão do
@@ -1214,6 +1239,11 @@ model PickupOrderItem {
 // aditiva (ALTER TYPE ... ADD VALUE), não muda a forma do DocumentCounter.
 enum BusinessDocumentType {
   ORDER
+  // D-042: fatura ganha numeração de negócio própria, mesmo mecanismo do
+  // Order — valor novo de enum, migração aditiva (ALTER TYPE ... ADD
+  // VALUE), não muda a forma do DocumentCounter (já antecipado desde
+  // D-015/D-035).
+  INVOICE
 }
 
 // Contador de numeração de negócio (D-015) — nunca SEQUENCE do Postgres:
@@ -1231,7 +1261,7 @@ enum BusinessDocumentType {
 // tabela por tipo. Chave pensada pra CT-e desde já, sem precisar de nova
 // migração quando ele existir:
 // - branchId é CNPJ (D-011) — bate com "sequencial por CNPJ" da D-015
-// - documentType distingue o tipo (ORDER hoje, CTE/INVOICE depois)
+// - documentType distingue o tipo (ORDER e INVOICE hoje, CTE depois)
 // - series cobre a série fiscal que CT-e exige ("e por série", D-015);
 //   Order não tem série de verdade, sempre usa a constante "1" — NOT NULL
 //   com default, não anulável: um "series" anulável quebraria a
@@ -1254,4 +1284,237 @@ model DocumentCounter {
   updatedAt    DateTime             @updatedAt @db.Timestamptz(3)
 
   @@unique([tenantId, branchId, documentType, series])
+}
+
+// Faturamento (D-042, revisa D-025) — validação de campo com o sócio
+// contradisse as duas premissas originais: fatura não é mensal (sai logo
+// após a entrega, gatilho é o canhoto assinado) e boleto não vem de
+// provedor terceiro (sai do banco da própria transportadora). Ver
+// docs/decisoes.md D-042 para o raciocínio completo.
+//
+// Ancora em Order, não em CT-e (que ainda não existe) nem em Trip: Trip
+// não carrega nenhum valor (só Order.total, D-014), então ratear entre
+// viagens seria inventar contorno pela ausência do CT-e — exatamente o
+// que não foi pedido. Order já tem total e customerReference (D-038, o
+// eixo — pedido nº 5 da D-042). Quando o CT-e existir, entra como
+// referência opcional sem reabrir este desenho.
+//
+// Sem InvoiceLine/tabela de junção: evidência é 1 Order pertence a no
+// máximo 1 Invoice (não N:N) — a FK fica direto em Order.invoiceId, uma
+// tabela a menos (CLAUDE.md 2, seção 3.4: arquivo/tabela novo é último
+// recurso).
+//
+// Sem status, sem total: "quanto se deve" deriva de SUM(order.total) dos
+// pedidos agrupados; "quanto já foi pago"/"situação" deriva de SUM sobre
+// ReceivableEvent (abaixo) — nunca coluna, mesmo critério de
+// CarrierPayment/D-032, "do outro lado do caixa".
+//
+// Sem UPDATE liberado nenhum: nada nesta tabela muda legitimamente
+// depois de criada (quais Order pertencem a ela muda pelo lado de
+// Order.invoiceId, não daqui). DELETE revogado (D-017: histórico
+// financeiro nunca se apaga).
+model Invoice {
+  id        String   @id @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  // Movimento é da filial (D-011) — mesmo critério de Order/Trip.
+  branchId  String   @db.Uuid
+  branch    Branch   @relation(fields: [branchId], references: [id])
+  // Tomador cobrado — reaproveita Party (D-018), não cadastro próprio.
+  partyId   String   @db.Uuid
+  party     Party    @relation(fields: [partyId], references: [id])
+  // Número de negócio (D-015), mesmo mecanismo de Order.number —
+  // DocumentCounter com documentType=INVOICE, atribuído na mesma
+  // transação do INSERT.
+  number    Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  orders    Order[]
+  boletos   Boleto[]
+  receivableEvents ReceivableEvent[]
+
+  @@unique([tenantId, branchId, number])
+  @@index([tenantId, branchId])
+  @@index([tenantId, partyId])
+}
+
+// Registro do boleto emitido no banco da transportadora (D-042) — decisão
+// revertida da D-025: emitir por provedor (Asaas/Cora/Iugu) trocaria a
+// conta em que o dinheiro do cliente cai, objeção comercial que não vale
+// arriscar o piloto. Mesmo padrão de D-006/D-019/D-023/D-039: o que mata
+// a planilha paralela é o REGISTRO, não a integração — o operador
+// continua gerando o boleto no banco, só registra aqui depois.
+//
+// digitableLine: texto livre, sem CHECK de formato (seção 1.6 — layout
+// de linha digitável varia por banco, não é regra estável o bastante pra
+// fixar de memória).
+//
+// 1:N com Invoice, não 1:1 — mesmo critério de TollVoucherPurchase
+// (D-036): barato modelar 1:N mesmo achando que é raro mais de um
+// boleto por fatura, caro retrofitar 1:1→1:N depois com dado real
+// dentro.
+//
+// PDF anexado via Attachment genérica (ownerType=BOLETO), não campo
+// próprio aqui — mesmo mecanismo do canhoto.
+//
+// Imutável por inteiro: registro simples de algo que já aconteceu no
+// banco, sem rascunho. Corrigir é linha nova (D-017), mesmo critério de
+// TollVoucherPurchase/PickupOrderItem. UPDATE/DELETE revogados sem
+// exceção de coluna.
+model Boleto {
+  id            String   @id @db.Uuid
+  tenantId      String   @db.Uuid
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  invoiceId     String   @db.Uuid
+  invoice       Invoice  @relation(fields: [invoiceId], references: [id])
+  number        String
+  // Data de calendário, não timestamp (D-016) — vencimento não tem hora.
+  dueDate       DateTime @db.Date
+  // Escala de valor final (D-013).
+  amount        Decimal  @db.Decimal(14, 2)
+  digitableLine String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([tenantId, invoiceId])
+}
+
+// Tipo de evento do livro de recebíveis (D-042) — vocabulário fixo do
+// sistema, não varia por tenant (D-020, mesmo critério de
+// PaymentEventType). Menor que o de CarrierPayment de propósito: sem
+// ADVANCE/DEDUCTION — não evidenciados do lado do recebível (a evidência
+// fala de conciliar pagamento e cobrar atraso, não de adiantamento nem
+// desconto negociado). Não inventar taxonomia que a validação não pediu.
+enum ReceivableEventType {
+  PAYMENT
+  REVERSAL
+}
+
+// Livro de eventos append-only do recebível (D-042) — mesmo desenho de
+// CarrierPayment (D-032), do outro lado do caixa: nunca coluna de saldo,
+// nunca coluna de status. "Quanto falta receber" é SEMPRE
+// SUM(order.total) dos pedidos da Invoice MENOS SUM(amount WHERE
+// type=PAYMENT) MAIS SUM(amount WHERE type=REVERSAL) — derivado em
+// consulta, nunca gravado.
+//
+// Nasce como livro de eventos mesmo com boleto registrado manualmente
+// (não emitido por API ainda) porque, quando a emissão por API entrar
+// (D-025 original, fora do escopo agora), ela vira só mais um
+// consumidor do MESMO livro — não uma migração de dado financeiro.
+//
+// amount sempre positivo — sinal/direção vem de type, nunca do número
+// (mesmo critério de CarrierPayment/D-012/D-014/D-029: banco garante,
+// não confia em disciplina).
+//
+// reversesReceivableEventId amarra REVERSAL ao evento que desfaz — mesmo
+// mecanismo exato de CarrierPayment.reversesPaymentId: CHECK nos dois
+// sentidos (só REVERSAL preenche, REVERSAL sempre preenche) e índice
+// único parcial impede estornar o mesmo evento duas vezes.
+//
+// Sem branchId: é filho de Invoice, que já carrega (D-011, mesmo
+// critério de CarrierPayment não duplicar o que CarrierHire já modela).
+//
+// UPDATE e DELETE revogados por inteiro (não GRANT de coluna): nenhuma
+// coluna aqui legitimamente muda depois de criada, mesmo critério de
+// CarrierPayment.
+model ReceivableEvent {
+  id        String              @id @db.Uuid
+  tenantId  String              @db.Uuid
+  tenant    Tenant              @relation(fields: [tenantId], references: [id])
+  invoiceId String              @db.Uuid
+  invoice   Invoice             @relation(fields: [invoiceId], references: [id])
+  type      ReceivableEventType
+
+  amount Decimal @db.Decimal(14, 2)
+
+  reversesReceivableEventId String?           @db.Uuid
+  reversesReceivableEvent   ReceivableEvent?  @relation("ReceivableReversal", fields: [reversesReceivableEventId], references: [id])
+  reversedBy                ReceivableEvent[] @relation("ReceivableReversal")
+
+  // Data de calendário, não timestamp (D-016) — data do pagamento não
+  // tem hora própria relevante ao domínio.
+  paymentDate   DateTime @db.Date
+  // Texto livre, mesmo critério de CarrierPayment.paymentMethod (seção
+  // 1.6 — sem vocabulário estável o bastante pra fixar em enum agora).
+  paymentMethod String?
+  reference     String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([tenantId, invoiceId])
+}
+
+// Entidade dona de um anexo (D-042) — fixo pelo sistema, não varia por
+// tenant (D-020, mesmo critério de PaymentEventType): são os tipos de
+// TABELA que hoje podem ter anexo, não vocabulário de negócio do tenant.
+// Só duas hoje, cada uma com exatamente um AttachmentType correspondente
+// — mas "entidade dona" e "tipo" são dimensões propositalmente separadas
+// (ver AttachmentType): um TRIP pode um dia ganhar um segundo tipo de
+// anexo (ex.: foto de avaria) sem precisar de tabela nova.
+enum AttachmentOwnerType {
+  TRIP
+  BOLETO
+}
+
+// Tipo de documento anexado (D-042) — separado de AttachmentOwnerType de
+// propósito: a mesma entidade dona pode um dia ter mais de um tipo de
+// anexo. Fixo pelo sistema (D-020).
+enum AttachmentType {
+  // Canhoto assinado — o GATILHO do faturamento (D-042): sem ele, não
+  // fatura. Dono é Trip (evento de entrega é por perna, D-018), não
+  // Order — Order pode ter mais de uma Trip (transbordo, D-037), cada
+  // uma com seu próprio canhoto.
+  PROOF_OF_DELIVERY
+  // PDF do boleto registrado (Boleto acima). Dono é Boleto.
+  BOLETO_PDF
+}
+
+// Metadados de anexo (D-042) — decisão nova, nada no sistema fazia isso
+// antes. Canhoto não se regenera (diferente do PDF de PickupOrder/D-034,
+// gerado sob demanda, nunca gravado, e do XML fiscal, texto pequeno que
+// cabe no Postgres) — é uma foto de celular, ~500/mês por transportadora,
+// binário grande demais pro banco de aplicação.
+//
+// Storage: objeto (Cloudflare R2, D-042) — fora do escopo desta unidade
+// a integração real (upload/geração de URL assinada): sem bucket/
+// credencial pra testar contra algo real, não seria código verificado,
+// só inventado (CLAUDE.md 1.4). `objectKey` é só o texto opaco que quem
+// subir o arquivo escreve aqui — a tabela não sabe nem precisa saber o
+// formato da chave.
+//
+// ownerType+ownerId é referência POLIMÓRFICA, sem FK — Postgres não tem
+// FK que aponte pra "uma linha de uma tabela dentre várias possíveis"
+// sem uma tabela extra de referência global (que não existe aqui, e
+// criar uma só pra isso seria estrutura que ninguém pediu). Validar que
+// ownerId existe de verdade e pertence ao tenant é regra de aplicação
+// (D-030), não integridade de concorrência — mesmo critério já aceito em
+// PickupOrder.addressId ("nada no banco valida que pertence ao sender").
+//
+// O RLS continua sendo o guarda (D-012) — sem segunda camada de
+// autorização agora, como pedido: a linha de Attachment só é visível
+// dentro do próprio tenant, e o acesso ao objeto em si (URL assinada de
+// vida curta) só se gera depois de achar a linha aqui — chave nunca
+// pública, sempre atrás do backend. Já nasce no formato que a D-010 vai
+// precisar quando o embarcador puder baixar o próprio canhoto, mas
+// nenhuma tela nem segunda autorização é construída agora.
+//
+// contentHash: sha256 do arquivo — dedupe e integridade, não validado
+// contra o objeto de verdade nesta unidade (sem storage real integrado).
+//
+// Append-only: UPDATE/DELETE revogados por inteiro — anexo errado é
+// linha nova (e, quando a integração real existir, objeto novo no
+// storage), nunca edição.
+model Attachment {
+  id               String              @id @db.Uuid
+  tenantId         String              @db.Uuid
+  tenant           Tenant              @relation(fields: [tenantId], references: [id])
+  ownerType        AttachmentOwnerType
+  ownerId          String              @db.Uuid
+  type             AttachmentType
+  objectKey        String
+  contentHash      String
+  sizeBytes        Int
+  uploadedByUserId String              @db.Uuid
+  uploadedByUser   User                @relation(fields: [uploadedByUserId], references: [id])
+  createdAt        DateTime            @default(now()) @db.Timestamptz(3)
+
+  @@index([tenantId, ownerType, ownerId])
 }
