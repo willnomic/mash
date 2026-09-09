@@ -170,10 +170,17 @@ documento. Evidência: `06c-emissao-para-cancelamento.txt`, `06c-cancelamento-pu
 
 ## Teste 7 — MDF-e completo
 
-**Ainda não concluído — mas a causa raiz do erro genérico foi isolada por execução real,
-e o payload foi inteiramente remontado a partir da documentação de campos real (não da
-página de referência REST, que só lista 4 campos obrigatórios — essa era a causa
-provável do erro genérico identificada antes desta retomada).**
+**Autorizado. Primeiro MDF-e da avaliação inteira, chave
+`MDFe42260962248663000187580010000000011565156768`.** Sete regras de negócio/estrutura
+da SEFAZ foram identificadas e resolvidas em sequência ao longo da segunda retomada
+(`745` tipo de transportador, `578` tomador — `contratantes` —, `212` data de emissão —
+recuar 2 minutos —, `663` percurso — `percursos` —, `301` NCM do produto —
+`codigo_ncm_produto` —, erro de schema em `pagamentos` — `infBanc` é grupo de ESCOLHA,
+não soma de campos). Depois de autorizado: condutor incluído por evento, MDF-e
+encerrado, segundo MDF-e pra mesma placa sem encerrar o primeiro reproduzido com
+mensagem exata (`status_sefaz: 611`, cita a chave do MDF-e aberto), e confirmado de novo
+(agora com mais tentativas reais) que não existe rota de consulta de MDF-e não
+encerrados por CNPJ. Ver seção "Retomada 2" abaixo pra detalhe completo.
 
 ### Sessão anterior (6 tentativas) — resumo, sem alteração
 
@@ -231,8 +238,8 @@ de método, não só resultado.
 | 07o | `veiculo_tracao` como array de um elemento (`[{...}]`) em vez de objeto solto | Mesmo erro |
 | 07p | Adicionado `codigo`/`renavam` dentro de `veiculo_tracao` | Mesmo erro |
 
-### Achado real, não resolvido: a string "veiculo_tracao" não existe em nenhuma das duas
-páginas de documentação indicadas
+### Achado da sessão anterior (mantido como histórico): a string "veiculo_tracao" não
+existe em nenhuma das duas páginas de documentação indicadas
 
 Confirmado por busca no HTML bruto (`grep`, case-insensitive, variações
 tração/tracao/trac): **zero ocorrências** em `MDFeXML.html` e em
@@ -243,29 +250,211 @@ páginas. A referência REST (`doc.focusnfe.com.br/reference/emitir_mdfe`) mostr
 exemplo mínimo com `"veiculo_tracao": {"placa": "ABC1234"}`, mas esse exemplo — testado
 literalmente no item 07n — **não funciona** contra a API real.
 
-Testei sete variações plausíveis da estrutura (wrapper `veiculo_tracao` em três
-posições/formatos diferentes, wrapper `veiculo`, campos soltos, com e sem `codigo`) e
-nenhuma fez o parser reconhecer sequer um campo do veículo de tração — o erro sempre
-volta para "esperava cInt ou placa aqui". **Não sei qual é a chave/estrutura JSON
-correta pros campos do veículo de tração (`placa`/`tara`/`capacidade_kg`/`tipo_rodado`/
-`tipo_carroceria`/`uf_licenciamento`) — as duas páginas indicadas não documentam isso
-sob nenhum nome que eu tenha conseguido encontrar. Não vou adivinhar uma décima
-variação sem mais alguma fonte** (mesma disciplina do item 12, alíquota do IBS).
+### Retomada 2 — a leitura do erro do item 07p estava errada; corrigida, revela a
+estrutura real (4 tentativas novas, `evidencias/07q-*` a `evidencias/07t-*`)
 
-**Ainda não emiti nenhum MDF-e de verdade** — os itens pedidos depois da emissão
-(incluir condutor via evento, encerrar, tentar um segundo MDF-e pra mesma placa sem
-encerrar o primeiro) **continuam não testados**, sem evidência de execução. Não vou
-simular.
+**A mensagem de erro do 07p (`"Element 'condutor': This element is not expected. Expected
+is (cInt, placa)"`) não diz que `veiculo_tracao` é desconhecido — diz que o parser
+ENTROU no grupo do veículo de tração e esperava `cInt`/`placa` ali, mas achou `condutor`
+fora de ordem.** Releitura correta apontou pra duas coisas: (1) o XSD é posicional —
+`condutor` é filho de `veicTracao`, vem DEPOIS dos campos do veículo, não antes nem como
+irmão; (2) portanto o bloqueio real nunca foi "campo desconhecido" — foi
+posição/estrutura.
+
+Rebaixando o HTML bruto de `TransporteRodoviarioXML.html` de novo (arquivo salvo em
+`evidencias/extra-mdfe-transporte-rodoviario-raw.html`) com foco total nos campos do
+veículo, achei a resposta: **não existe wrapper nenhum.** Os campos do veículo de tração
+são atributos de nível RAIZ do próprio `TransporteRodoviarioXML` (= `modal_rodoviario`),
+com sufixo `_veiculo`, na ordem exata do JSON embutido (que bate com a ordem real do
+XSD `tveiculoTracao`: cInt, placa, RENAVAM, tara, capKG, capM3, [proprietário
+condicional], condutor(es), tpRod, tpCar, UF):
+
+`codigo_veiculo` (cInt) → `placa_veiculo` (placa, obrigatório) → `renavam_veiculo`
+(RENAVAM) → `tara_veiculo` (tara, obrigatório) → `capacidade_kg_veiculo` (capKG) →
+`capacidade_m3_veiculo` (capM3) → *(grupo proprietário, condicional — só obrigatório se
+algum campo dele for preenchido)* → **`condutores`** (Coleção[1-10], mesmo nome de
+sempre, SEM sufixo, `collection_type: InfoCondutorXML`, campos `nome`/`cpf`) →
+`tipo_rodado_veiculo` (tpRod) → `tipo_carroceria_veiculo` (tpCar, obrigatório) →
+`uf_licenciamento_veiculo` (UF, obrigatório).
+
+Isso explica retroativamente o item 07i (sessão anterior): ele já tinha os nomes
+sufixados certos, mas ainda dentro de um wrapper `veiculo_tracao` — por isso deu o
+MESMO erro do 07h (veicTracao vazio). O wrapper em si é que nunca existiu.
+
+| # | Mudança testada | Resultado |
+|---|---|---|
+| 07q | Campos do veículo FLAT em `modal_rodoviario`, com sufixo `_veiculo`, `condutores` flat na posição certa (depois dos campos do veículo) | **Erro de veículo/condutor sumiu** — mas dois erros de SCHEMA novos, sem relação com o veículo: `modal` (campo raiz do MDF-e, não `modal_rodoviario`) com valor `"01"` rejeitado — enum real é `{'1','2','3','4'}`, sem zero à esquerda (diferente da convenção do CT-e); e `infLotacao`/`tpCarga` — faltava `tipo_carga` |
+| 07r | Corrigido `modal: "1"` + adicionado `tipo_carga: "05"` (Carga Geral) | Erro de schema mudou de novo: `infLotacao`/`xProd` — faltava `descricao_produto` |
+| 07s | Adicionado `descricao_produto: "Carga geral"` | **Schema 100% aceito** (`202`) — primeira vez que um MDF-e passa da validação de schema nesta avaliação inteira. Rejeitado pela SEFAZ por regra de negócio: `status_sefaz: 745`, *"O tipo de transportador não pode ser informado quando não estiver informado proprietário do veículo de tração"* — `tipo_transporte` exige o grupo proprietário preenchido junto |
+| 07t | Removido `tipo_transporte` (campo opcional, regra do 745 não se aplica mais sem ele) | Schema aceito de novo, autorização SEFAZ rejeitada por outra regra: `status_sefaz: 578`, *"Informações dos tomadores é obrigatória para esta operação"* |
+| 07u | Adicionado `contratantes` (`modal_rodoviario.contratantes[]`, CNPJ do remetente/tomador do CT-e vinculado) | Schema aceito, `578` não voltou — **mas rejeição nova**: `status_sefaz: 212`, *"Data de emissao MDF-e posterior a data de recebimento"* |
+| 07v | Relógio conferido contra 2 fontes HTTP independentes (sem desvio) + `data_emissao` recuada 2 minutos do horário atual, offset `-03:00` | `212` não voltou — **mas rejeição nova**: `status_sefaz: 663`, *"Percurso informado inválido"* |
+| 07w | Adicionado `percursos: [{"uf_percurso": "PR"}]` (raiz do payload — SC→SP passa pelo Paraná) | `663` não voltou — **mas rejeição nova**: `status_sefaz: 301`, *"O NCM do produto predominante da carga lotação deve ser informado"* |
+| 07x | Adicionado `codigo_ncm_produto: "94036000"` (NCM real, via `GET /v2/ncms` da própria Focus) + `descricao_produto` ajustado pra "Moveis de madeira" (coerência) | `301` não voltou — **mas rejeição nova**: `status_sefaz: 302`, *"As informações de pagamento devem ser informadas para carga lotação"* |
+| 07y | Adicionado `pagamentos[]` completo (lido no HTML bruto, campos `cnpj`/`componentes`/`valor_total_contrato`/`forma_pagamento`/`numero_banco`/`numero_agencia`/`cnpj_instituicao_pagamento`) | **Voltou a ser erro de SCHEMA** (não regra de negócio): `Element 'CNPJIPEF': This element is not expected` — ordem do JSON da doc não bate com a ordem real do XSD pros 3 últimos campos |
+| 07z | Removido `cnpj_instituicao_pagamento` — `infBanc` é grupo de ESCOLHA (banco+agência OU CNPJIPEF OU PIX), mantido só `numero_banco`+`numero_agencia` | **AUTORIZADO.** `status_sefaz: 100`, chave `...011565156768`, `numero: 1` — primeiro MDF-e da avaliação inteira |
+
+**Resultado desta retomada: ainda não autorizado, mas o bloqueio do veículo de tração
+está resolvido — confirmado por execução real (schema aceito, sem nenhum erro sobre
+veículo/condutor desde o item 07s).**
+
+**Tentativa extra 07u — grupo `contratantes`, confirmou a hipótese e resolveu o 578:**
+o rejeição 578 ("Informações dos tomadores é obrigatória") era esperada, já que
+`emitente: "1"` (prestador de serviço de transporte) exige saber quem contratou o
+serviço. Achado no HTML bruto de `TransporteRodoviarioXML.html`: `contratantes`
+(Coleção[0-1000], `collection_type: InfoContratanteXML`), atributo de nível raiz de
+`modal_rodoviario` (mesmo nível de `condutores`/`veiculos_reboque`), campos `nome`
+(opcional), `cpf` OU `cnpj` (um dos dois, condicional), `id_estrangeiro`/
+`numero_contrato`/`valor_global_contrato` (opcionais). Preenchido com o CNPJ do
+remetente/tomador do CT-e já vinculado (`11111111000191`, mesmo CNPJ usado como
+`cnpj_remetente`/tomador=0 no CT-e de controle do Teste 1) → **schema aceito de novo,
+`578` não apareceu mais.** Mas surgiu uma rejeição NOVA e sem relação:
+`status_sefaz: 212`, *"Rejeicao: Data de emissao MDF-e posterior a data de recebimento"*
+— não investigada, atingido o limite combinado (4 tentativas da retomada + 1 extra
+autorizada = 5 no total, parado após a 5ª conforme instrução). Evidência:
+`evidencias/07u-mdfe-com-contratantes.txt`, `evidencias/07u-mdfe-poll-1.txt`.
+
+**Tentativa extra 07v — checagem de relógio + `data_emissao` recuada 2 minutos,
+confirmou a hipótese e resolveu o 212:** comparado o relógio da máquina contra duas
+fontes HTTP independentes (cabeçalho `Date` do próprio servidor de homologação da Focus
+e do `google.com`) — as três bateram no segundo (`2026-09-09T20:11:36Z`), sem desvio
+mensurável. Não era desvio de relógio local. Reenviado com `data_emissao` = agora menos
+2 minutos, offset `-03:00` (America/Sao_Paulo, sem horário de verão desde 2019) →
+**`212` não voltou.** Mas surgiu uma rejeição nova e sem relação:
+`status_sefaz: 663`, *"Rejeição: Percurso informado inválido"* — não investigada,
+atingido o limite combinado de tentativas (parado conforme instrução, sem tentar uma
+sexta). Evidência: `evidencias/07v-mdfe-data-emissao-menos-2min.txt`,
+`evidencias/07v-mdfe-poll-1.txt`.
+
+**Tentativa extra 07w — grupo `percursos`, confirmou a hipótese e resolveu o 663:**
+achado em `MDFeXML.html` (raiz do payload, não dentro de `modal_rodoviario`):
+`percursos` (Coleção[0-25], `collection_type: InfoPercursoXML`), único campo
+`uf_percurso` (tag `UFPer`, obrigatório). Preenchido `[{"uf_percurso": "PR"}]` (SC→SP
+passa pelo Paraná) → **`663` não voltou.** Rejeição nova, sem relação:
+`status_sefaz: 301`, *"Rejeição: O NCM do produto predominante da carga lotação deve
+ser informado"* — não investigada, parado conforme instrução (uma tentativa por
+mensagem do usuário, sem seguir sozinho pro próximo campo). Evidência:
+`evidencias/07w-mdfe-com-percursos.txt`, `evidencias/07w-mdfe-poll-1.txt`.
+
+**Tentativa extra 07x — `codigo_ncm_produto`, confirmou a hipótese e resolveu o 301:**
+campo achado em `MDFeXML.html`, ao lado de `descricao_produto`: `codigo_ncm_produto`
+(`String[8]`, tag `NCM`, marcado `required: false` na doc mas exigido de fato pela SEFAZ
+pra carga lotação — mesmo padrão de obrigatoriedade condicional não documentada já visto
+em `valor_total_dfe`/`tipo_carga`). NCM escolhido pela API acessória da própria Focus
+(`GET /v2/ncms`, com filtro `?descricao=` ou `?codigo=` — endpoint confirmado por
+execução real, não documentação), não inventado: `94036000` ("Outros móveis de
+madeira"), com `descricao_produto` atualizado pra "Moveis de madeira" pra ficar coerente
+com o NCM real escolhido → **`301` não voltou.** Rejeição nova, sem relação:
+`status_sefaz: 302`, *"Rejeição: As informações de pagamento devem ser informadas para
+carga lotação"* — não investigada, parado conforme instrução. Evidência:
+`evidencias/07x-mdfe-com-ncm.txt`, `evidencias/07x-mdfe-poll-1.txt`.
+
+**Tentativa extra 07y — grupo `pagamentos` completo, NÃO resolveu — primeiro erro de
+SCHEMA desde o item 07s, depois de 5 rejeições seguidas de regra de negócio:** montado a
+partir da leitura direta do HTML bruto de `TransporteRodoviarioXML.html`, seção
+`pagamentos` (`InfoPagamentoXML`, campos confirmados no arquivo — não adivinhados):
+`nome`/`cpf`/`cnpj`/`id_estrangeiro`, `componentes[]` (`tipo`/`valor`/`descricao`,
+`collection_type: ComponentePagamentoXML`), `valor_total_contrato` (obrigatório),
+`alto_desempenho`, `forma_pagamento` (obrigatório, `"0"`=à vista/`"1"`=à prazo),
+`valor_adiantamento`, `indicador_adiantamento`, `parcelas[]` (só se à prazo),
+`tipo_permissao_antecipacao`, `numero_banco`/`numero_agencia`/
+`cnpj_instituicao_pagamento` (todos marcados `required: true` incondicional na doc,
+diferente do grupo proprietário do veículo que é condicional) e `pix` (opcional).
+Enviado com `forma_pagamento: "0"` (à vista, evita o grupo `parcelas`), componente único
+tipo `"04"` (Frete) somando `valor_total_contrato`, banco/agência genéricos (código real
+Febraban `001`=Banco do Brasil) e `cnpj_instituicao_pagamento` fictício, na ORDEM exata
+do JSON da doc (`numero_banco` → `numero_agencia` → `cnpj_instituicao_pagamento`) →
+**rejeitado ainda na validação de SCHEMA**, antes mesmo de chegar na SEFAZ:
+`Element 'CNPJIPEF': This element is not expected.` A ordem/estrutura desses três
+últimos campos dentro do XSD real não bate com a ordem em que aparecem no JSON da
+documentação de campos (mesmo padrão de divergência posicional já visto no grupo do
+veículo de tração — a doc lista os campos, mas não garante que a ordem do JSON é a ordem
+exigida pelo XSD de destino). Não tentei uma segunda ordem — parado conforme instrução.
+Evidência: `evidencias/07y-mdfe-com-pagamentos.txt`.
+
+**Tentativa extra 07z — `infBanc` é grupo de ESCOLHA (banco+agência OU CNPJIPEF OU PIX),
+não sequência. AUTORIZADO.** O erro do 07y não era ordem — era eu ter enviado
+`numero_banco` + `numero_agencia` + `cnpj_instituicao_pagamento` juntos; o XSD real
+(`infBanc`) aceita só UMA das três alternativas. Removido `cnpj_instituicao_pagamento`,
+mantido só `numero_banco`/`numero_agencia` → **`202` → `status_sefaz: 100`, "Autorizado
+o uso do MDF-e".** Primeiro MDF-e autorizado da avaliação inteira. Chave
+`MDFe42260962248663000187580010000000011565156768`, `numero: 1`. XML + DAMDFE baixados
+(`evidencias/arquivos/07z-mdfe-autorizado.xml`,
+`evidencias/arquivos/07z-mdfe-autorizado-damdfe.pdf`). Evidência da emissão:
+`evidencias/07z-mdfe-pagamentos-so-banco-agencia.txt`, `evidencias/07z-mdfe-poll-1.txt`.
+
+### Passos pós-autorização (nunca testados antes — todos executados agora)
+
+**a) Inclusão de condutor pós-emissão.** Endpoint confirmado em
+`doc.focusnfe.com.br/reference/incluir_condutor_mdfe`: `POST /v2/mdfe/{referencia}/inclusao_condutor`,
+corpo **flat** (`cpf` + `nome`, ambos obrigatórios — não é array `condutores`, diferente
+do campo de mesmo nome na emissão). Enviado condutor novo (não o mesmo da emissão) →
+`200`, `status: incluido`, `status_sefaz: 135`, *"Evento registrado e vinculado ao
+MDF-e"*, XML do evento gerado. Evidência: `evidencias/07za-inclusao-condutor.txt`, XML em
+`evidencias/arquivos/07za-evento-inclusao-condutor.xml`.
+
+**b) Encerramento.** Endpoint confirmado em
+`doc.focusnfe.com.br/reference/encerrar_mdfe`: `POST /v2/mdfe/{referencia}/encerrar`,
+campos `data` (`YYYY-MM-DD`), `nome_municipio`, `sigla_uf` (todos obrigatórios, sem
+`codigo_municipio`). Enviado com o município de descarga (São Paulo/SP) → `200`,
+`status: encerrado`, `status_sefaz: 135`. Evidência: `evidencias/07zb-encerramento.txt`,
+XML em `evidencias/arquivos/07zb-evento-encerramento.xml`.
+
+**c) Segundo MDF-e pra mesma placa, sem encerrar o primeiro — mensagem exata
+capturada.** Como o MDF-e #1 já tinha sido encerrado no passo (b), emiti um MDF-e #2
+NOVO (mesma placa `TST1A23`) e deixei ele propositalmente aberto — autorizado,
+`numero: 2`, chave `MDFe42260962248663000187580010000000021199245135`. Em seguida
+tentei um MDF-e #3, mesma placa, sem encerrar o #2:
+`status_sefaz: 611`, **`"Rejeição: Existe MDF-e não encerrado para esta placa, tipo de
+emitente e UF descarregamento [chMDFe Não Encerrada:42260962248663000187580010000000021199245135][NroProtocolo:942260000019862]"`**
+— confirma a regra citada na documentação (que antes só tinha sido lida, nunca
+reproduzida), e a mensagem real cita a CHAVE e o PROTOCOLO do MDF-e aberto, não só um
+texto genérico. Evidência: `evidencias/07zc-mdfe2-mesma-placa-envio.txt`,
+`evidencias/07zc-mdfe2-poll-1.txt` (MDF-e #2, autorizado e deixado aberto),
+`evidencias/07zd-mdfe3-mesma-placa-sem-encerrar-envio.txt`,
+`evidencias/07zd-mdfe3-poll-1.txt` (MDF-e #3, rejeitado). **O MDF-e #2 ficou
+propositalmente sem encerrar** — é estado residual conhecido desta avaliação, não um
+erro.
+
+**d) Rota de consulta de MDF-e não encerrados por CNPJ — confirmado de novo que NÃO
+existe, agora com mais tentativas reais contra a API (não só a doc):**
+- `GET /v2/mdfe?cnpj_emitente=...` → `404 nao_encontrado` (já confirmado em sessão
+  anterior, `evidencias/07f-tentativa-listagem-mdfe-por-cnpj.txt`, sem mudança).
+- `GET /v2/mdfe/nao_encerrados?cnpj_emitente=...` → `404`, mas revelador: a API tratou
+  `"nao_encerrados"` como se fosse um valor de `{referencia}` (rota
+  `GET /v2/mdfe/{referencia}` é a única que existe nesse padrão) — *"MDF-e não
+  encontrado"*, não *"endpoint não encontrado"*. Confirma que não há rota especial, só a
+  de consulta por referência única.
+- `GET /v2/mdfe?placa=...` → `404 nao_encontrado`, *"Endpoint não encontrado"* — sem
+  suporte a filtro por placa também.
+- A página de referência `consultar_mdfe` (`doc.focusnfe.com.br/reference/consultar_mdfe`)
+  só documenta o path `/mdfe/{referencia}` — nenhum parâmetro de query, nenhuma variante
+  de listagem. Confirmado lendo a página, não só tentando.
+
+Evidência: `evidencias/07ze-tentativa-nao-encerrados-1.txt`,
+`evidencias/07ze-tentativa-nao-encerrados-2.txt`.
+
+**`evidencias/suporte-mdfe-veiculo-tracao.txt` (preparado numa retomada anterior)
+continua obsoleto** — os dois achados que ele descrevia (veículo de tração, depois
+`pagamentos`/`infBanc`) foram corrigidos; o MDF-e autoriza hoje.
+
+**Itens pedidos pra depois da autorização (incluir condutor via evento, encerrar,
+segundo MDF-e mesma placa, consulta de não encerrados por CNPJ) continuam NÃO testados**
+— dependem de um MDF-e autorizado, que ainda não aconteceu. Não vou simular.
 
 **7d — rota de consulta de MDF-e não encerrados por CNPJ:** não existe (já confirmado na
 sessão anterior, sem mudança). Evidência: `evidencias/07f-tentativa-listagem-mdfe-por-cnpj.txt`.
 
-**Onde divergiu do esperado (atualizado):** a expectativa original era que a
-documentação de campos (que já resolveu o CT-e) fosse suficiente pro MDF-e também. Não
-foi — o campo que trava a emissão (o veículo de tração) parece genuinely ausente das
-duas páginas específicas indicadas, não só difícil de achar. Ou a documentação tem uma
-lacuna real aqui, ou existe uma terceira fonte (outra página, ou um exemplo de payload
-completo que a Focus não expõe publicamente) que eu não localizei.
+**Onde divergiu do esperado (atualizado de novo):** a expectativa original era que a
+documentação de campos fosse insuficiente pro MDF-e (achado da retomada 1). Essa
+expectativa estava errada — a documentação SEMPRE teve a resposta certa
+(`campos.focusnfe.com.br/mdfe/TransporteRodoviarioXML.html`, campos `_veiculo` sufixados,
+sem wrapper); o bloqueio real foi eu ter lido errado a mensagem de erro do 07p e
+concluído "campo não documentado" quando na verdade era "campo certo, posição errada,
+schema exige leitura posicional". Fica registrado como achado de método: mensagem de
+erro XSD com "Expected is (X, Y)" não significa "X e Y são os únicos campos aceitos" —
+significa "nesta posição da sequência, o parser esperava X ou Y", e "esta posição" pode
+estar logo no início de um grupo que o payload nunca chegou a preencher.
 
 ---
 
@@ -367,13 +556,22 @@ exatamente a modelagem que D-041 já antecipava.
    encontrada em nenhuma página que li antes de executar.
 4. **MDF-e: qualidade de erro muito inferior à do CT-e** uma vez que o payload é
    "grande o bastante" — erro genérico que não aponta nenhum campo, quando o CT-e sempre
-   apontou exatamente o elemento XSD esperado. **Atualizado nesta retomada:** o erro
-   genérico tinha causa real e diagnosticável (RNTRC ausente em `modal_rodoviario`) —
-   depois de corrigido, os erros do MDF-e voltam a ser específicos como os do CT-e. O
-   que continua divergente: o campo do veículo de tração não está documentado sob
-   nenhum nome que eu tenha encontrado em `campos.focusnfe.com.br/mdfe/MDFeXML.html`
-   nem em `.../TransporteRodoviarioXML.html` — só o exemplo mínimo da referência REST
-   cita `veiculo_tracao`, e esse exemplo não funciona contra a API real (testado).
+   apontou exatamente o elemento XSD esperado. **Resolvido — MDF-e autoriza.** Não era
+   divergência de documentação — era eu lendo errado duas mensagens de erro XSD: (a)
+   "Expected is (cInt, placa)" não significa "só esses dois campos existem", significa
+   "nesta posição da sequência"; os campos do veículo de tração ESTAVAM documentados o
+   tempo todo em `TransporteRodoviarioXML.html`, como atributos de nível raiz de
+   `modal_rodoviario` com sufixo `_veiculo`, sem wrapper `veiculo_tracao`; (b) "Element
+   'CNPJIPEF' not expected" não era erro de ordem — `infBanc` é grupo de ESCOLHA
+   (banco+agência OU CNPJIPEF OU PIX), não soma dos três. Depois de corrigidos os dois, o
+   payload passou 100% da validação de schema e autorizou (chave
+   `MDFe42260962248663000187580010000000011565156768`). No caminho até autorizar, seis
+   regras de negócio da SEFAZ genuinamente não documentadas apareceram em sequência
+   (tipo de transportador exige proprietário do veículo; tomador obrigatório — grupo
+   `contratantes`; data de emissão não pode ser exatamente "agora" — precisa de folga;
+   percurso interestadual exige UFs intermediárias — `percursos`; NCM do produto
+   obrigatório pra carga lotação; informações de pagamento obrigatórias pra carga
+   lotação) — cada uma revelada só depois de corrigir a anterior, uma de cada vez.
 5. **Mensagens de erro da SEFAZ passam em português cru** (`status_sefaz` + `mensagem_sefaz`
    com o texto oficial, ex. "Data de Emissao muito atrasada") — não parecem traduzidas
    nem parafraseadas pela Focus.
