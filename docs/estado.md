@@ -4,21 +4,109 @@ Snapshot do que existe, não do plano. Contexto do projeto em `contexto.md`, dec
 `decisoes.md`. Atualizar ao fim de cada etapa concluída — se este arquivo e o código
 divergirem, o código vence, e o arquivo está desatualizado.
 
-Atualizado em 09/09/2026, commit `bb9578a` (D-034 a D-041 já em `master`) + trabalho desta
-sessão: D-042 (faturamento e contas a receber — revisa D-025: `Invoice`/`Boleto`/
-`ReceivableEvent`/`Attachment`, `Order.invoiceId`, `Party.invoicingPreference`), D-043
-(corrige um erro da D-041 — IBS/CBS somavam ao preço sem condição; correto é não compor
-durante a calibragem de 2026 — e amplia `TaxRate` com os três casos de ICMS,
-`IbsCbsTaxSituation`, e três colunas reservadas em `Tenant` pra regime tributário, com
-base em consulta contábil registrada em `docs/consulta-tributaria-2026-09.md`), e D-044
-(provedor de documento fiscal avaliado em homologação e escolhido — Focus NFe — sem
-adaptador construído ainda; evidência em `docs/RESULTADO.md`/`docs/CAMPOS-FALTANTES-MASH.md`).
+Atualizado em 10/09/2026, commit `88f1d9f` (D-034 a D-044 já em `master`, avaliação MDF-e
+concluída) + trabalho desta sessão: repositório reestruturado em npm workspaces
+(`backend`/`frontend`/`shared` — `frontend` só declarado, ainda não existe) e criado
+`shared/` (`@mash/shared`), pacote TypeScript puro sem NestJS/React/Prisma, com o
+primeiro tipo de domínio compartilhado: `TimeWindow` (janela de tempo em linguagem
+natural, pendência técnica registrada em `decisoes.md`) — `parseTimeWindow`,
+`formatTimeWindow`, `precisionOf`, `validateTimeWindow`. Parser verificado contra a
+planilha operacional real de 2025 (1.453 formas distintas) — nove códigos de período
+confirmados, busca de horário em qualquer posição da string, tolerância a erro de
+digitação, e um conjunto de 31 formas deliberadamente fora de escopo (ordem de perna,
+dependência de evento, regra de endereço, data alternativa), com duas pendências novas
+registradas em `decisoes.md` por causa disso (`Address` sem horário de funcionamento;
+ordem de perna usando a coluna de data por falta de lugar). Nenhuma mudança de schema;
+nenhum model do Prisma ainda usa o tipo (é essa a unidade seguinte). Detalhe em
+"`@mash/shared`" abaixo.
 
 ---
 
 ## Construído, com teste passando
 
-Só backend (`backend/`). Nenhuma tela existe ainda.
+Backend (`backend/`) e o pacote compartilhado (`shared/`, `@mash/shared`). Nenhuma tela
+existe ainda — `frontend/` só está declarado no `workspaces` da raiz.
+
+**Repositório: npm workspaces**
+- Raiz ganhou `package.json` (`workspaces: ["backend", "frontend", "shared"]`) e `.npmrc`
+  com `legacy-peer-deps=true` — sem isso, `npm install` na raiz quebra com `ERESOLVE`
+  (`nestjs-cls@6.2.2` declara peer `@nestjs/common`/`@nestjs/core >=10 <12`, o projeto
+  está em `^12.0.1`; mesmo problema já documentado abaixo, "Pendências técnicas"). Um só
+  `package-lock.json` agora na raiz — o de `backend/` foi removido, não existe mais lock
+  por workspace individual.
+- `backend/package.json` ganhou a dependência `"@mash/shared": "*"` (protocolo de
+  workspace do npm — sempre resolve pro pacote local, nunca busca no registry). Prova de
+  fiação: `backend/src/shared-workspace-import.spec.ts` importa e usa
+  `parseTimeWindow`/`formatTimeWindow`/`precisionOf` de `@mash/shared` — não é lógica de
+  negócio do backend, só confirma que a resolução via workspace funciona (`npm test` e
+  `npm run build` do backend, os dois verificados depois da reestruturação).
+- Mesmo comportamento do `npm 11` já registrado em "Pendências técnicas conhecidas"
+  (install-scripts bloqueados) reconfirmado com `npm install` rodando na RAIZ em vez de
+  `backend/`: `npx prisma generate` teve que ser rodado à mão dentro de `backend/` depois
+  do install (sem isso, `@prisma/client` fica sem o client gerado — `P2025` nos testes).
+  `argon2` funcionou sem rebuild — prebuild `win32-x64` já embutido no pacote, carregado
+  em tempo de `require`, não no install.
+
+**`@mash/shared`** (`shared/`) — pacote TypeScript puro, sem NestJS/React/Prisma como
+dependência (`shared/package.json`), buildado com `tsc` (`npm run build`, também roda
+sozinho no `prepare` do `npm install`, então o consumidor não precisa lembrar de buildar
+à mão).
+- `time-window/` — primeiro tipo do pacote, para a pendência técnica "janela de tempo em
+  linguagem natural" (`decisoes.md`). `TimeWindow` (`date`/`startTime`/`endTime`/
+  `endsNextDay`/`dayPeriodCode`/`note`), com invariantes validadas por
+  `validateTimeWindow` (nunca lança — devolve lista de violações) e precisão sempre
+  DERIVADA (nunca armazenada) por `precisionOf`: `EXACT`/`RANGE`/`UNTIL`/`FROM`/`PERIOD`/
+  `DAY`.
+- `parseTimeWindow(input, referenceYear)` — nunca lança; o que não reconhece vai inteiro
+  pra `note`, com `date` preenchida quando reconhecível. Busca hora/faixa em QUALQUER
+  posição da string (não só logo após a data), com tolerância a erro de digitação
+  confirmado em dado real (pontuação sobrando, "A PARTIR DA" sem S, conector "A" grudado
+  no horário, dígito separado por espaço, "MIEO"/"PRMEIRA"). Também reconhece a própria
+  saída de `formatTimeWindow` (necessário pro teste de ida e volta).
+- **Quando horário explícito e período nomeado aparecem na mesma célula, o horário
+  ganha** (ex. "FINAL DA TARDE APÓS AS 18H00" → `startTime: "18:00"`, não
+  `dayPeriodCode`). A invariante que proíbe os dois juntos não muda — quem resolve o
+  conflito é o parser: `dayPeriodCode` fica nulo, os campos de horário são preenchidos, e
+  a célula original inteira vai pra `note` (estruturação PARCIAL, diferente de fallback
+  total — `note` preenchido não significa mais "nada foi reconhecido"). Mesma regra
+  resolve mês implausível com hora presente (`"11/00 - 09H00"` → `date: ''`, horário
+  extraído, string inteira em `note`) e string sem data nenhuma
+  (`"(RECEBIMENTO DAS 07H00 A 17H00)"` → mesma lógica, sem prefixo de data pra achar).
+- **Nove códigos de período, todos confirmados em dado real** (planilha operacional de
+  2025, 1.951 células / 1.453 formas distintas — contagens sobre as células originais,
+  não sobre as formas deduplicadas do fixture): `MORNING` ("pela manhã"/"pela manha"/"de
+  manha", 35), `AFTERNOON` ("pela tarde", 37), `EVENING` ("pela noite"/"a noite", 2),
+  `FIRST_HOUR` ("primeira hora da manhã", 13 — sinônimos "primeira hora"/"primeira hora
+  do dia"), `END_OF_DAY` ("final da tarde", 3 — sinônimo "fim de tarde"), `MIDDAY` ("meio
+  dia", 5), `LATE_MORNING` ("final da manhã", 2 — novo), `EARLY_AFTERNOON` ("início da
+  tarde"/"primeira hora da tarde", 2 — novo), `ALL_DAY` ("recebe o dia inteiro", 1 —
+  novo). "Até o meio dia" vira horário (`endTime: "12:00"`), não o período `MIDDAY` —
+  confirmado em dado real (`"15/10 - ATE O MEIO DIA"`).
+- `formatTimeWindow(window, dayPeriodLabel?)` — saída em português (D-008). Não guarda
+  tradução de período: quem chama passa o rótulo (vem da tabela de domínio, unidade
+  seguinte); sem rótulo, cai no próprio código como texto degradado.
+- **Fixture real recebida e verificada** — `time-window/__fixtures__/janelas-planilha-pedro-2025.json`
+  (1.453 formas distintas, 1.951 células originais, extraídas das colunas DATA DE
+  COLETA/ENTREGA/DEVOLUÇÃO de uma planilha operacional real de 2025 — dado anterior ao
+  modelo, não gerado por nós). `time-window.fixture.spec.ts` não usa mais taxa
+  percentual: declara o CONJUNTO EXATO de 31 formas que devem cair em fallback total
+  (nada estruturado além, possivelmente, da data) e falha se o conjunto real divergir em
+  qualquer direção — algo novo caindo em fallback, ou algo da lista deixando de cair
+  (regra nova engoliu o que era pra ficar de fora). As 31 se dividem em quatro categorias
+  de negócio, documentadas tanto no teste quanto no comentário acima de
+  `parseTimeWindow` em `time-window.parser.ts`: ordem da perna dentro do pedido
+  (`Trip.sequence`, D-037 — 17 formas, ex. "PRIMEIRA DE QUINTA", "12/03 - TERCEIRO"),
+  dependência de evento/status de viagem, não horário (9 formas, ex. "LOGO APÓS A
+  DESCARGA", "LIBERADO"), regra de horário de funcionamento do `Address`, não da carga (1
+  forma: "ORDEM DE CHEGADA"), e data alternativa — decisão deliberada de não modelar (4
+  formas, ex. "05/03 OU 06/03": ancora na primeira data, string inteira em `note`). As
+  duas primeiras categorias geraram pendências novas em `decisoes.md` (`Address` sem
+  horário de funcionamento; ordem de perna registrada hoje na coluna de data por falta de
+  lugar). Distribuição final: `EXACT` 574, `RANGE` 550, `UNTIL` 191, `FROM` 16, `PERIOD`
+  71, `DAY` 51 (mais 32 formas estruturadas parcialmente, com `note` preenchido junto).
+  Todos os 65 testes do pacote passam.
+- Nenhum model do Prisma foi alterado — `PickupOrder.pickupWindow` continua `String?`
+  livre (D-034). Ligar o tipo ao schema é decisão da próxima unidade, não desta.
 
 **Infraestrutura**
 - Multi-tenant por RLS (D-012): dois roles de banco (`mash_owner`/`mash_app`), `forTenant()`,
@@ -269,7 +357,10 @@ serviço sem controller nem entidade própria além de `DocumentCounter` — con
 
 ---
 
-## Testes: 286 passando (5 arquivos/22 unitários + 55 arquivos/264 e2e), zero mock de banco
+## Testes: 287 passando no backend (6 arquivos/23 unitários + 55 arquivos/264 e2e), zero
+mock de banco — mais 65 no `shared/` (`npm test` dentro de `shared/`, todos passando,
+incluindo `time-window.fixture.spec.ts` contra a planilha real, ver "`@mash/shared`"
+acima)
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -325,8 +416,13 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | RLS de `Attachment`, "download" de outro tenant recusado na consulta que qualquer URL assinada futura precisaria fazer primeiro, dois `ownerType` diferentes (`TRIP`/`BOLETO`) aceitos, `UPDATE`/`DELETE` recusados (D-042) | `attachment-rls.e2e-spec.ts` |
 | Decimal (unitário — sem banco): operador nativo concatena, `.plus()`/`.minus()` somam/subtraem certo na soma sinalizada de `ReceivableEvent` (PAYMENT soma, REVERSAL desfaz), D-013 (D-042) | `receivable-decimal.spec.ts` |
 | Regime tributário de `Tenant` nasce nulo (assento reservado), aceita ser preenchido com `incomeTaxRegime`/`isSimplesIcmsContributor`/`ibsCbsApurationRegime` (D-043) | `tenant-rls.e2e-spec.ts` |
+| `@mash/shared` resolve pelo npm workspace (fiação, não lógica de negócio) | `shared-workspace-import.spec.ts` |
 
-Comando: `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`.
+Comando: `npm install` agora roda na RAIZ do repositório (workspaces) — não mais dentro de
+`backend/`. Depois disso, `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`,
+continuam iguais. `npx prisma generate` precisa ser rodado à mão depois do `npm install`
+da raiz (ver "Repositório: npm workspaces" acima — npm 11 não roda mais esse
+install-script sozinho).
 
 ---
 
@@ -395,7 +491,11 @@ uma linha de código ainda:
   emitiu aviso pra `@prisma/engines`, `argon2` e `prisma` (scripts não cobertos por
   `allowScripts`). Verificado que não quebrou nada — build, `prisma generate` e as duas
   suítes de teste passaram normalmente — mas não investigado a fundo; pode importar pra
-  CI/deploy se a plataforma usar `npm ci` com esse comportamento.
+  CI/deploy se a plataforma usar `npm ci` com esse comportamento. **Reconfirmado depois
+  da reestruturação em npm workspaces** (`npm install` agora roda na raiz): mesmo aviso,
+  mesma necessidade de `npx prisma generate` manual dentro de `backend/` depois do
+  install — o comportamento não mudou com workspaces, só o diretório de onde o `npm
+  install` roda.
 - **`npm install pdfkit` (D-034) também exigiu `--legacy-peer-deps`.** Mesma família de
   problema do item `nestjs-cls` abaixo, não um conflito novo do pdfkit em si: o `npm
   install` puro falha com `ERESOLVE` porque `nestjs-cls@6.2.2` declara peer
@@ -405,8 +505,13 @@ uma linha de código ainda:
   projeto precisa de `--legacy-peer-deps`** enquanto o `nestjs-cls` não publicar suporte
   a Nest 12 (ou o Nest não for rebaixado) — isso inclui o `npm ci` de deploy (D-005):
   se a plataforma gerenciada rodar `npm ci` sem essa flag, o build de produção quebra
-  no mesmo `ERESOLVE`. Ainda não verificado se o `npm ci` do pipeline de deploy já
-  passa essa flag — ação pendente antes do primeiro deploy real.
+  no mesmo `ERESOLVE`. **Parcialmente endereçado nesta sessão:** `.npmrc` na raiz do
+  repositório agora fixa `legacy-peer-deps=true` (lido por `npm install` e por `npm ci`
+  automaticamente, sem precisar da flag na linha de comando) — mas ainda não verificado
+  contra o `npm ci` real do pipeline de deploy (a plataforma gerenciada pode ter
+  configuração própria que ignore `.npmrc` do projeto). Ação pendente antes do primeiro
+  deploy real continua de pé, só o mecanismo mudou de "lembrar de passar a flag" para
+  "confirmar que a plataforma respeita o `.npmrc`".
 - **Vulnerabilidades do `npm audit`: decisão registrada, aceitas por ora.** Avaliação
   anterior nesta sessão: transitivas do CLI do Prisma (`mysql2`/`deepmerge-ts`),
   dev-only, não entram no `dist/` do build. Revisitar quando o Prisma atualizar. **Não

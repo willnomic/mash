@@ -64,6 +64,30 @@ nada aqui foi verificado em produção ainda.
       release do `nestjs-cls` com suporte declarado a Nest 12 até o momento desta
       verificação; revisitar se isso mudar.
 
+- [ ] **Repositório virou npm workspaces — confirmar se o pipeline de build aponta para
+      a raiz, não para `backend/`.**
+      `backend/package-lock.json` foi removido nesta sessão (reestruturação em npm
+      workspaces, `docs/estado.md`) — agora existe um único `package-lock.json` na raiz
+      do repositório, ao lado do `package.json` com `workspaces:
+      ["backend", "frontend", "shared"]`. Plataformas gerenciadas normalmente rodam
+      `npm ci` dentro da pasta do serviço (aqui seria `backend/`) — sem lock local ali,
+      isso ou quebra (`npm ci` exige `package-lock.json` no diretório) ou reinstala sem
+      o lock travado (perde a garantia de árvore reproduzível). Não verificado contra
+      Railway/Render de verdade — confirmar que o pipeline roda `npm ci`/`npm install`
+      a partir da RAIZ do repositório antes do primeiro deploy pós-reestruturação.
+
+- [ ] **Ordem de build do pipeline: `shared` precisa compilar antes de `backend`.**
+      `backend` depende de `@mash/shared` (`"@mash/shared": "*"`, resolvido pelo npm
+      workspace) e importa do `dist/` compilado do pacote (`shared/package.json`:
+      `main`/`exports` apontam pra `dist/index.js`), não do `src/` em TypeScript. Em
+      desenvolvimento isso é automático (`prepare` do `npm install` da raiz builda
+      `shared` sozinho), mas não foi verificado se o pipeline de deploy da plataforma
+      gerenciada roda os `prepare` scripts dos workspaces antes do `nest build` do
+      backend, ou se precisa de um passo explícito (`npm run build --workspace=shared`
+      antes de `npm run build --workspace=backend`). Confirmar a ordem real antes do
+      primeiro deploy pós-reestruturação — sem `shared/dist/`, o build do backend falha
+      ao resolver o import.
+
 - [ ] **Role `mash_app` criado manualmente, fora de qualquer migração.**
       `docker/init-db.sql` cria o role `mash_app` só no ambiente local (roda uma vez,
       na criação do container). Em produção isso **não acontece sozinho** — é passo

@@ -325,8 +325,16 @@ acessa o banco interno de outro.
 - `DATABASE_URL` — dono, apenas para migrações via CLI
 - `DATABASE_URL_APP` — aplicação, sem posse de tabela (senão o RLS não se aplica)
 
-**Comandos:** (rodar dentro de `backend/` — é o único app do repositório até agora)
-- Build: `npm run build` (`nest build`)
+**Repositório é npm workspaces** (`backend`, `frontend` — declarado no `workspaces` da
+raiz, ainda não existe —, `shared`). `package.json`/`package-lock.json`/`.npmrc`
+(`legacy-peer-deps=true`) ficam na RAIZ, não em `backend/`. **`npm install` roda na
+raiz** — instalar só dentro de `backend/` não usa o lock certo.
+
+**Comandos do backend:** (rodar dentro de `backend/`, depois do `npm install` da raiz)
+- Build: `npm run build` (`nest build`) — resolve `@mash/shared` pelo node_modules
+  simlincado do workspace; `shared/` precisa estar buildado antes (o `prepare` do `npm
+  install` da raiz já faz isso sozinho — só rodar `npm run build` dentro de `shared/` à
+  mão se editar o pacote sem reinstalar)
 - Teste unitário: `npm test` (`vitest run`)
 - Teste de integração/e2e: `npm run test:e2e` (`vitest run --config ./vitest.config.e2e.ts`)
   — roda contra PostgreSQL real (RLS é do banco); precisa do container subido
@@ -337,11 +345,19 @@ acessa o banco interno de outro.
   aplicar (editar à mão pra RLS depois, conforme `docs/d012-multi-tenant-rls.md`);
   `npx prisma migrate reset --force` reaplica tudo do zero em dev — **ação
   destrutiva, exige confirmação explícita do usuário a cada execução** (seção 2);
-  `npx prisma generate` regenera o client. Conexão via `prisma.config.ts`
-  (`DATABASE_URL`, dono) — não mais `datasource.url` no `schema.prisma` (Prisma 7)
+  `npx prisma generate` regenera o client — **rodar à mão depois de `npm install` na
+  raiz** (npm 11 não roda mais esse install-script sozinho — `docs/estado.md`,
+  pendências técnicas). Conexão via `prisma.config.ts` (`DATABASE_URL`, dono) — não mais
+  `datasource.url` no `schema.prisma` (Prisma 7)
+
+**Comandos do `shared`:** (pacote `@mash/shared` — TypeScript puro, sem NestJS/React/
+Prisma) `npm run build` (`tsc`, dentro de `shared/`); `npm test` (`vitest run`, dentro de
+`shared/`) — suíte independente da do backend.
 
 **Estrutura de diretórios:**
 ```
+package.json                 — raiz do workspace: workspaces: [backend, frontend, shared]
+.npmrc                       — legacy-peer-deps=true (nestjs-cls x Nest 12)
 backend/
   prisma/
     schema.prisma          — models e enums
@@ -356,6 +372,11 @@ backend/
   test/
     *.e2e-spec.ts            — RLS, guarda de schema, auth — contra Postgres real
     *.spec.ts                — unitário
+shared/                      — @mash/shared: TypeScript puro (sem NestJS/React/Prisma),
+                                consumido pelo backend via node_modules do workspace
+  src/
+    time-window/             — TimeWindow (janela de tempo em linguagem natural, D-008)
+frontend/                     — declarado no workspace, ainda não existe
 docker-compose.yml           — Postgres local (porta 5433 — a 5432 já tem um
                                 Postgres nativo na máquina)
 docker/init-db.sql           — cria o role mash_app (cluster-level, sobrevive a reset)

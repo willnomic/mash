@@ -2322,6 +2322,23 @@ Focus, aguardando resposta (pendência registrada abaixo).
       trás. **Decidir antes da primeira tela** — a ordem de coleta já existe, e telas
       futuras (agendamento em terminal, follow-up) herdam a decisão errada se ela nascer
       improvisada numa tela específica em vez de pensada aqui.
+- [ ] **`Address` não tem horário de funcionamento.** A D-027 já lista isso como
+      conteúdo da ordem de coleta, e o dado real usado pra construir `@mash/shared`
+      (`shared/src/time-window/`, planilha operacional de 2025) confirma que é uma
+      necessidade de verdade — células como "ORDEM DE CHEGADA" (regra de atendimento do
+      local, não da carga: primeiro a chegar é atendido primeiro, não tem horário fixo)
+      não são janela de tempo nenhuma, são regra do endereço. Não construir agora — só
+      registrado, o parser deixa essas formas de propósito em fallback
+      (`shared/src/time-window/time-window.parser.ts`, comentário acima de
+      `parseTimeWindow`).
+- [ ] **Ordem da perna dentro do pedido (`Trip.sequence`, D-037) é registrada hoje na
+      coluna de data, por falta de lugar próprio — confirmado em dado real.** Mesma
+      planilha operacional de 2025: células como "PRIMEIRA DE QUINTA", "SEGUNDA DE
+      SEXTA", "12/03 - TERCEIRO", "PRIMEIRA ENTREGA"/"SEGUNDA ENTREGA" não são horário —
+      são o operador dizendo qual perna/entrega é essa dentro do pedido, sem ter onde
+      colocar isso, e usando o campo de data como gambiarra. Não muda a D-037 em si, só
+      reforça que o campo certo (`Trip.sequence`) já existe e o problema é a UI/processo
+      não ter dado ao operador um lugar pra registrar isso desde o início.
 - [ ] **Prazo limite da carga não tem campo — nem `Order`, nem `Trip`.** É o dado que
       define o prazo de emissão do CT-e (precisa emitir antes do prazo vencer), e hoje
       não existe em lugar nenhum do modelo.

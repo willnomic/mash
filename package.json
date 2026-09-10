@@ -1,0 +1,10 @@
+{
+  "name": "mash",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend",
+    "shared"
+  ]
+}
