@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { base, forTenant } from '../src/prisma/prisma-tenant.js';
 import { ensureQuoteStatusesSeeded } from './helpers/seed-quote-statuses.js';
 import { ensureTripStatusesSeeded } from './helpers/seed-trip-statuses.js';
+import { ensureDayPeriodsSeeded } from './helpers/seed-day-periods.js';
 import { seedPickupOrderScenario } from './helpers/seed-pickup-order-scenario.js';
 import { PickupOrderService } from '../src/pickup-order/pickup-order.service.js';
 import { TenantPrisma } from '../src/tenant/tenant-prisma.service.js';
@@ -31,12 +32,14 @@ describe('PickupOrder · geração de PDF (D-027)', () => {
     await admin.$executeRawUnsafe(TRUNCATE);
     await ensureQuoteStatusesSeeded(admin);
     await ensureTripStatusesSeeded(admin);
+    await ensureDayPeriodsSeeded(admin);
   });
 
   afterAll(async () => {
     await admin.$executeRawUnsafe(TRUNCATE);
     await ensureQuoteStatusesSeeded(admin);
     await ensureTripStatusesSeeded(admin);
+    await ensureDayPeriodsSeeded(admin);
     await admin.$disconnect();
     await base.$disconnect();
   });
@@ -142,5 +145,91 @@ describe('PickupOrder · geração de PDF (D-027)', () => {
     const service = new PickupOrderService(tenantPrismaFor(seed.tenant.id));
 
     await expect(service.generatePdf(uuidv7())).rejects.toThrow();
+  });
+
+  // D-045 — a janela de coleta no PDF passa a vir de formatTimeWindow
+  // (@mash/shared), não de texto livre, quando há algo estruturado. As
+  // sete formas cobrem as seis precisões de TimeWindow que carregam
+  // horário/período, mais o fallback pra pickupTimeNote quando não há
+  // nada estruturado. Cada asserção confere o texto exato que
+  // formatTimeWindow produz — já coberto campo a campo em
+  // shared/src/time-window/time-window.formatter.spec.ts; aqui a prova é
+  // que ele chega inteiro no PDF real, extraído de volta com pdf-parse.
+  describe('janela de coleta — sete formas de TimeWindow (D-045)', () => {
+    async function pdfText(seed: Awaited<ReturnType<typeof seedPickupOrderScenario>>) {
+      const service = new PickupOrderService(tenantPrismaFor(seed.tenant.id));
+      const buffer = await service.generatePdf(seed.pickupOrder.id);
+      const parser = new PDFParse({ data: buffer });
+      const result = await parser.getText();
+      await parser.destroy();
+      return result.text;
+    }
+
+    it('faixa: "10/09, das 08h00 às 10h00"', async () => {
+      const seed = await seedPickupOrderScenario(admin, 'A', 'transportadora-a', 1, {
+        pickupStartTime: '08:00',
+        pickupEndTime: '10:00',
+      });
+
+      expect(await pdfText(seed)).toContain('Janela de coleta: 10/09, das 08h00 às 10h00');
+    });
+
+    it('exato: "10/09, às 08h00"', async () => {
+      const seed = await seedPickupOrderScenario(admin, 'A', 'transportadora-a', 1, {
+        pickupStartTime: '08:00',
+        pickupEndTime: '08:00',
+      });
+
+      expect(await pdfText(seed)).toContain('Janela de coleta: 10/09, às 08h00');
+    });
+
+    it('até: "10/09, até as 17h30"', async () => {
+      const seed = await seedPickupOrderScenario(admin, 'A', 'transportadora-a', 1, {
+        pickupEndTime: '17:30',
+      });
+
+      expect(await pdfText(seed)).toContain('Janela de coleta: 10/09, até as 17h30');
+    });
+
+    it('a partir de: "10/09, a partir das 13h00"', async () => {
+      const seed = await seedPickupOrderScenario(admin, 'A', 'transportadora-a', 1, {
+        pickupStartTime: '13:00',
+      });
+
+      expect(await pdfText(seed)).toContain('Janela de coleta: 10/09, a partir das 13h00');
+    });
+
+    it('período: "10/09, Pela manhã" — rótulo vindo de DayPeriod.name', async () => {
+      const morning = await admin.dayPeriod.findFirstOrThrow({
+        where: { code: 'MORNING', tenantId: null },
+      });
+      const seed = await seedPickupOrderScenario(admin, 'A', 'transportadora-a', 1, {
+        pickupDayPeriodId: morning.id,
+      });
+
+      expect(await pdfText(seed)).toContain('Janela de coleta: 10/09, Pela manhã');
+    });
+
+    it('cruzando meia-noite: "10/09, das 22h00 às 00h00 do dia seguinte"', async () => {
+      const seed = await seedPickupOrderScenario(admin, 'A', 'transportadora-a', 1, {
+        pickupStartTime: '22:00',
+        pickupEndTime: '00:00',
+        pickupEndsNextDay: true,
+      });
+
+      expect(await pdfText(seed)).toContain(
+        'Janela de coleta: 10/09, das 22h00 às 00h00 do dia seguinte',
+      );
+    });
+
+    it('só nota: nada estruturado cai em pickupTimeNote, texto livre', async () => {
+      const seed = await seedPickupOrderScenario(admin, 'A', 'transportadora-a', 1, {
+        pickupTimeNote: 'Combinar direto com o motorista',
+      });
+
+      expect(await pdfText(seed)).toContain(
+        'Janela de coleta: Combinar direto com o motorista',
+      );
+    });
   });
 });

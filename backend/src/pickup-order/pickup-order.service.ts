@@ -1,6 +1,40 @@
 import { Injectable } from '@nestjs/common';
+import { formatTimeWindow, type TimeWindow } from '@mash/shared';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 import { buildPickupOrderPdf, type PickupOrderPdfData } from './pickup-order.pdf.js';
+
+// Resolve o texto da janela de coleta pro PDF: usa @mash/shared quando há
+// algo estruturado (horário ou período), cai em pickupTimeNote quando não
+// há (D-045) — inclusive quando pickupDate é nulo, já que TimeWindow
+// exige data pra existir.
+function resolvePickupWindowText(pickupOrder: {
+  pickupDate: Date | null;
+  pickupStartTime: string | null;
+  pickupEndTime: string | null;
+  pickupEndsNextDay: boolean;
+  pickupDayPeriod: { code: string; name: string } | null;
+  pickupTimeNote: string | null;
+}): string | null {
+  const hasStructured =
+    pickupOrder.pickupStartTime !== null ||
+    pickupOrder.pickupEndTime !== null ||
+    pickupOrder.pickupDayPeriod !== null;
+
+  if (pickupOrder.pickupDate === null || !hasStructured) {
+    return pickupOrder.pickupTimeNote;
+  }
+
+  const window: TimeWindow = {
+    date: pickupOrder.pickupDate.toISOString().slice(0, 10),
+    startTime: pickupOrder.pickupStartTime,
+    endTime: pickupOrder.pickupEndTime,
+    endsNextDay: pickupOrder.pickupEndsNextDay,
+    dayPeriodCode: pickupOrder.pickupDayPeriod?.code ?? null,
+    note: null,
+  };
+
+  return formatTimeWindow(window, pickupOrder.pickupDayPeriod?.name);
+}
 
 @Injectable()
 export class PickupOrderService {
@@ -18,6 +52,7 @@ export class PickupOrderService {
       include: {
         address: true,
         items: { orderBy: { createdAt: 'asc' } },
+        pickupDayPeriod: true,
         trip: {
           include: {
             driver: true,
@@ -39,7 +74,7 @@ export class PickupOrderService {
     const data: PickupOrderPdfData = {
       pickupDate: pickupOrder.pickupDate,
       locationLabel: pickupOrder.locationLabel,
-      pickupWindow: pickupOrder.pickupWindow,
+      pickupWindow: resolvePickupWindowText(pickupOrder),
       businessHours: pickupOrder.businessHours,
       totalWeightKg: pickupOrder.totalWeightKg.toString(),
       totalVolumeCount: pickupOrder.totalVolumeCount,

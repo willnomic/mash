@@ -105,8 +105,9 @@ sozinho no `prepare` do `npm install`, então o consumidor não precisa lembrar 
   lugar). Distribuição final: `EXACT` 574, `RANGE` 550, `UNTIL` 191, `FROM` 16, `PERIOD`
   71, `DAY` 51 (mais 32 formas estruturadas parcialmente, com `note` preenchido junto).
   Todos os 65 testes do pacote passam.
-- Nenhum model do Prisma foi alterado — `PickupOrder.pickupWindow` continua `String?`
-  livre (D-034). Ligar o tipo ao schema é decisão da próxima unidade, não desta.
+- **Ligado ao schema em D-045** (`DayPeriod` + colunas estruturadas em `PickupOrder`,
+  `pickupWindow` renomeado pra `pickupTimeNote`) — detalhe completo na entrada
+  `PickupOrder`/`PickupOrderItem`, mais abaixo.
 
 **Infraestrutura**
 - Multi-tenant por RLS (D-012): dois roles de banco (`mash_owner`/`mash_app`), `forTenant()`,
@@ -280,6 +281,18 @@ sozinho no `prepare` do `npm install`, então o consumidor não precisa lembrar 
   é emitir de novo, mesmo critério de `Order`/`CarrierHire`. PDF gerado sob demanda na
   resposta HTTP (`pdfkit`), nunca gravado em disco/storage, sem rota pública — link
   compartilhável fica reservado pra D-010
+- **Janela de tempo estruturada (D-045):** `DayPeriod` (tabela de domínio, D-020, nove
+  códigos confirmados em dado real — mesmo padrão `OrderStatus`/`QuoteCostType`) +
+  `PickupOrder.pickupStartTime`/`pickupEndTime` (texto `"HH:mm"`, não `time` nativo —
+  evita a confusão de fuso da D-016)/`pickupEndsNextDay`/`pickupDayPeriodId` (FK,
+  `ON DELETE RESTRICT`). `pickupWindow` renomeado pra `pickupTimeNote` (`RENAME COLUMN`,
+  D-031/D-033). `pickupDate` virou nullable. Cinco `CHECK` impõem as invariantes de
+  `TimeWindow` (`@mash/shared`) no banco, cada uma com o caso `NULL` testado
+  (`pickup-order-time-window-check.e2e-spec.ts`, 19 testes — mesma disciplina de guarda
+  contra lógica de três valores do `TaxRate`, D-043). `PickupOrderService.generatePdf`
+  usa `formatTimeWindow` quando há algo estruturado, rótulo de `DayPeriod.name`, cai em
+  `pickupTimeNote` quando não há nada — sete formas verificadas no PDF real
+  (`pickup-order-pdf.e2e-spec.ts`).
 
 **Terceiro** (`CarrierHire`, `CarrierPayment`, `TollVoucherPurchase`, `DeductionReason`,
 D-019)
@@ -357,10 +370,12 @@ serviço sem controller nem entidade própria além de `DocumentCounter` — con
 
 ---
 
-## Testes: 287 passando no backend (6 arquivos/23 unitários + 55 arquivos/264 e2e), zero
+## Testes: 315 passando no backend (6 arquivos/23 unitários + 57 arquivos/292 e2e), zero
 mock de banco — mais 65 no `shared/` (`npm test` dentro de `shared/`, todos passando,
 incluindo `time-window.fixture.spec.ts` contra a planilha real, ver "`@mash/shared`"
-acima)
+acima). **Números verificados contra o banco já sincronizado com as 29 migrações — não
+contra um `prisma migrate reset --force` (D-045: bloqueado pelo guard de IA do Prisma
+CLI, aguardando confirmação explícita do usuário).**
 
 Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `CHECK` e
 `GRANT` de coluna são do banco, não dá pra confiar em mock pra isso.
@@ -405,8 +420,10 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 | RLS de `Occurrence`, `CHECK occurredAt<=createdAt`, `UPDATE` restrito a `description`, `DELETE` recusado, tipo interno não aparece em consulta filtrada por `isPublic` | `occurrence.e2e-spec.ts` |
 | RLS de `PickupOrder` | `pickup-order-rls.e2e-spec.ts` |
 | RLS de `PickupOrderItem` | `pickup-order-item-rls.e2e-spec.ts` |
-| PDF real (não mock): 1 item cabe em 1 página; 40 itens produzem mais de uma página sem sobrepor nem cortar texto, todos os 40 presentes no texto extraído de volta com `pdf-parse`, cabeçalho "(continuação)" bate com o total de páginas menos uma; `UPDATE`/`DELETE` recusados em `PickupOrder` e `PickupOrderItem` | `pickup-order-pdf.e2e-spec.ts` |
+| PDF real (não mock): 1 item cabe em 1 página; 40 itens produzem mais de uma página sem sobrepor nem cortar texto, todos os 40 presentes no texto extraído de volta com `pdf-parse`, cabeçalho "(continuação)" bate com o total de páginas menos uma; `UPDATE`/`DELETE` recusados em `PickupOrder` e `PickupOrderItem`; janela de coleta (D-045) nas sete formas de `TimeWindow` — faixa, exato, até, a partir de, período (rótulo `DayPeriod.name`), cruzando meia-noite, só nota — extraídas do PDF real com `pdf-parse` | `pickup-order-pdf.e2e-spec.ts` |
 | Rota `GET /pickup-orders/:id/pdf` ponta a ponta (sem token → 401, com token → PDF com `Content-Type` correto, token de outro tenant não vaza PDF alheio) | `pickup-order-http.e2e-spec.ts` |
+| `DayPeriod` compartilhado (`tenantId` nulo visível a todos, período próprio de outro tenant invisível, D-020/D-045) | `day-period-rls.e2e-spec.ts` |
+| As cinco invariantes de `TimeWindow` impostas por `CHECK` em `PickupOrder` (formato `"HH:mm"`, `dayPeriodId` exclui horário, `endsNextDay` exige os dois horários e `end<start`, sem `endsNextDay` exige `end>=start`) — caso `NULL` de cada uma testado (D-045, mesma disciplina de guarda contra lógica de três valores do `TaxRate`, D-043) | `pickup-order-time-window-check.e2e-spec.ts` |
 | RLS de `DocumentCounter` | `document-counter-rls.e2e-spec.ts` |
 | Numeração (D-015): sequencial em criações sucessivas; unicidade de `(tenantId, branchId, number)` garantida no banco; `DocumentCounter` libera só `UPDATE` de `lastNumber`, `DELETE` recusado; rollback depois de pegar o número não desperdiça o número (reaproveitado na próxima criação real); **concorrência real** — 10 criações simultâneas via `Promise.all` produzem 10 números distintos sem buraco, com contenção de lock observada de verdade em `pg_stat_activity` (não só resultado correto por acaso) | `order-numbering.e2e-spec.ts` |
 | Guarda: `TenantPrisma.transaction()` continua protegido por RLS (D-012, D-035) — leitura via `tx.<model>` e via `tx.$queryRaw` não vazam tenant, escrita no tenant alheio recusada, duas `transaction()` concorrentes de tenants diferentes não se misturam, e o contexto de tenant não vaza pra próxima conexão do pool depois que a transação termina | `tenant-prisma-transaction-rls.e2e-spec.ts` |

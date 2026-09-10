@@ -79,6 +79,7 @@ model Tenant {
   occurrenceTypes      OccurrenceType[]
   occurrences          Occurrence[]
   carrierProfiles      CarrierProfile[]
+  dayPeriods           DayPeriod[]
   pickupOrders         PickupOrder[]
   pickupOrderItems     PickupOrderItem[]
   invoices             Invoice[]
@@ -1240,6 +1241,32 @@ model Occurrence {
   @@index([tenantId, typeId])
 }
 
+// Período do dia (janela de tempo em linguagem natural — pendência técnica
+// de decisoes.md, tipo `TimeWindow`/`DayPeriodCode` já em
+// `shared/src/time-window`, D-020). Lista de domínio em tabela, não enum
+// — mesmo padrão de OrderStatus/QuoteCostType: tenantId nulo = padrão do
+// sistema, catálogo compartilhado (RLS libera leitura E escrita em
+// tenantId IS NULL, não isolamento padrão). Código em inglês (D-007), name
+// carrega o rótulo em português (D-008) — é o rótulo que formatTimeWindow
+// usa (o pacote compartilhado não guarda tradução, só o código).
+//
+// Nove códigos, todos confirmados em dado real (planilha operacional de
+// 2025, shared/src/time-window/time-window.parser.ts) — não a taxonomia
+// completa, mesmo critério que já semeou só três OrderStatus e dois
+// TripStatus.
+model DayPeriod {
+  id           String        @id @db.Uuid
+  tenantId     String?       @db.Uuid
+  tenant       Tenant?       @relation(fields: [tenantId], references: [id])
+  code         String
+  name         String
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+  pickupOrders PickupOrder[]
+
+  @@unique([tenantId, code])
+}
+
 // Ordem de coleta (D-027) — comunicação entre operador e motorista, não
 // documento fiscal, emissão opcional pra qualquer Order. Âncora é a Trip,
 // não o Order direto: "dados do motorista" só existe de fato em
@@ -1272,12 +1299,39 @@ model Occurrence {
 //
 // nfeReference/romaneioReference: texto livre — NF-e (D-024) e romaneio
 // ainda não são entidades no sistema, é o operador anotando a referência
-// externa manualmente. pickupWindow/businessHours/laborNote: texto livre
-// também (seção 1.6 — formato varia demais pra fixar regra).
+// externa manualmente. businessHours/laborNote: texto livre também (seção
+// 1.6 — formato varia demais pra fixar regra).
+//
+// Janela de tempo estruturada (pickupStartTime/pickupEndTime/
+// pickupEndsNextDay/pickupDayPeriodId) — tipo `TimeWindow` de
+// `@mash/shared` materializado em coluna (pendência técnica de
+// decisoes.md, fechada nesta migração). pickupTimeNote (renomeado de
+// pickupWindow) é o que sobra: texto original preservado quando o parser
+// não estruturou tudo, ou o próprio texto livre de sempre pra quem
+// preenche a tela sem passar pelo parser. As cinco invariantes do tipo
+// (dayPeriodId excludente com horário, endsNextDay exige os dois horários
+// e end<start, sem endsNextDay end>=start quando os dois existem) são
+// impostas por CHECK no banco, não só no TypeScript — mesmo padrão de
+// TaxRate (D-043): a garantia mora onde o dado é escrito, não só em quem
+// escreve direito.
+//
+// Hora como texto "HH:mm" (VARCHAR(5)), NÃO time nativo do Postgres: o
+// Prisma mapeia @db.Time de volta pra um objeto Date com data de
+// 1970-01-01 embutida, reabrindo a confusão de fuso que a D-016 manda
+// evitar (hora sem data teria fuso implícito de novo). @mash/shared já
+// trata hora como string em todo o pacote — "HH:mm" com zero à esquerda
+// ordena corretamente em comparação lexicográfica de texto, então os CHECK
+// abaixo (end < start, end >= start) funcionam no banco exatamente como
+// funcionariam com um tipo de hora nativo.
+//
+// pickupDate fica NULLABLE por enquanto — existem PickupOrder de teste sem
+// data (seedPickupOrderScenario preenche, mas nada no banco exige). Vira
+// NOT NULL quando a tela for a única porta de criação de PickupOrder.
 //
 // Imutável por inteiro: é movimento (D-011), e corrigir significa emitir
 // de novo (nova linha), não editar — mesmo critério de Order/CarrierHire.
-// UPDATE e DELETE revogados do role de aplicação, sem exceção de coluna.
+// UPDATE e DELETE revogados do role de aplicação, sem exceção de coluna —
+// as colunas novas entram só no INSERT, a imutabilidade já cobre tudo.
 model PickupOrder {
   id                String            @id @db.Uuid
   tenantId          String            @db.Uuid
@@ -1292,9 +1346,15 @@ model PickupOrder {
   // containers" — informação que não é campo de Address (D-024/NF-e).
   locationLabel     String?
   // Data de calendário, não timestamp (D-016) — data da coleta não tem
-  // fuso próprio relevante ao domínio.
-  pickupDate        DateTime          @db.Date
-  pickupWindow      String?
+  // fuso próprio relevante ao domínio. Nullable — ver comentário acima.
+  pickupDate        DateTime?         @db.Date
+  pickupStartTime   String?           @db.VarChar(5)
+  pickupEndTime     String?           @db.VarChar(5)
+  pickupEndsNextDay Boolean           @default(false)
+  pickupDayPeriodId String?           @db.Uuid
+  pickupDayPeriod   DayPeriod?        @relation(fields: [pickupDayPeriodId], references: [id], onDelete: Restrict)
+  // Renomeado de pickupWindow — ver comentário acima.
+  pickupTimeNote    String?
   businessHours     String?
   totalWeightKg     Decimal           @db.Decimal(10, 3)
   totalVolumeCount  Int

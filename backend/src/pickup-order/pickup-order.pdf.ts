@@ -32,7 +32,9 @@ export interface PickupOrderPdfItem {
 }
 
 export interface PickupOrderPdfData {
-  pickupDate: Date;
+  // Nullable desde D-045 — existem PickupOrder de teste sem data
+  // (backend/prisma/schema.prisma, PickupOrder.pickupDate).
+  pickupDate: Date | null;
   locationLabel: string | null;
   pickupWindow: string | null;
   businessHours: string | null;
@@ -53,8 +55,8 @@ export interface PickupOrderPdfData {
   items: PickupOrderPdfItem[];
 }
 
-function formatDate(d: Date): string {
-  return d.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+function formatDate(d: Date | null): string {
+  return d ? d.toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'data não definida';
 }
 
 function formatAddress(a: PickupOrderPdfAddress): string {

@@ -2,15 +2,29 @@ import type { PrismaClient } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { seedOrderScenario } from './seed-order-scenario.js';
 
+// Campos da janela de tempo estruturada (D-045) — todos opcionais, sem
+// valor default aqui: quem chama decide a combinação (formas do teste de
+// PDF), e o próprio CHECK do banco recusa combinação inválida.
+export type PickupOrderTimeWindowOverrides = {
+  pickupStartTime?: string | null;
+  pickupEndTime?: string | null;
+  pickupEndsNextDay?: boolean;
+  pickupDayPeriodId?: string | null;
+  pickupTimeNote?: string | null;
+};
+
 // Cadeia completa até uma Trip, pra não repetir esse setup em todo teste
 // de PickupOrder — mesmo padrão de seedCarrierHireScenario. itemCount
 // parametrizável: o teste de paginação do PDF precisa gerar a mesma ordem
-// com 1 item e com 40.
+// com 1 item e com 40. timeWindow parametrizável: o teste de PDF precisa
+// das sete formas de TimeWindow (D-045); sem override, mantém o texto
+// livre de sempre (nenhuma das outras colunas preenchida).
 export async function seedPickupOrderScenario(
   admin: PrismaClient,
   name: string,
   slug: string,
   itemCount = 1,
+  timeWindow: PickupOrderTimeWindowOverrides = {},
 ) {
   const base = await seedOrderScenario(admin, name, slug);
 
@@ -44,7 +58,11 @@ export async function seedPickupOrderScenario(
       addressId: base.address.id,
       locationLabel: 'Doca 3',
       pickupDate: new Date('2026-09-10'),
-      pickupWindow: '14h às 16h',
+      pickupTimeNote: timeWindow.pickupTimeNote ?? '14h às 16h',
+      pickupStartTime: timeWindow.pickupStartTime,
+      pickupEndTime: timeWindow.pickupEndTime,
+      pickupEndsNextDay: timeWindow.pickupEndsNextDay,
+      pickupDayPeriodId: timeWindow.pickupDayPeriodId,
       businessHours: 'seg a sex, 8h às 18h',
       totalWeightKg: '1250.500',
       totalVolumeCount: itemCount,

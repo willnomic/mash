@@ -2296,6 +2296,88 @@ Focus, aguardando resposta (pendência registrada abaixo).
 
 ---
 
+## D-045 · `DayPeriod` e janela de tempo estruturada em `PickupOrder`
+**Status:** Fechada
+
+Fecha a pendência técnica "janela de tempo em linguagem natural" (registrada abaixo, em
+Pendências) — o tipo `TimeWindow` já existia em `@mash/shared`
+(`shared/src/time-window`, commit `bf7f5ea`), esta unidade materializa ele no schema.
+
+**`DayPeriod`:** mesmo padrão de `OrderStatus`/`QuoteCostType` (D-020/D-038) — tabela,
+não enum, `tenantId` nulo = padrão do sistema, catálogo compartilhado (RLS libera
+leitura **e** escrita em `tenantId IS NULL`). Nove códigos semeados, todos confirmados
+em dado real (planilha operacional de 2025, `shared/src/time-window/
+time-window.parser.ts`) — não a taxonomia completa, mesmo critério que já semeou só três
+`OrderStatus` e dois `TripStatus`. `code` em inglês (D-007), `name` carrega o rótulo em
+português (D-008) — é esse rótulo que `formatTimeWindow` usa (o pacote compartilhado não
+guarda tradução).
+
+**`PickupOrder`:** `pickupWindow` renomeado pra `pickupTimeNote` (`ALTER ... RENAME
+COLUMN`, não `DROP`+`ADD` — mesmo critério de D-031/D-033: sem dado de produção, mas o
+histórico da coluna importa). Colunas novas, todas nullable, sem backfill:
+`pickupStartTime`/`pickupEndTime` (`VARCHAR(5)`, texto `"HH:mm"`), `pickupEndsNextDay`
+(`BOOLEAN NOT NULL DEFAULT false`), `pickupDayPeriodId` (FK pra `DayPeriod`, `ON DELETE
+RESTRICT`). `pickupDate` (já existia, `NOT NULL`) virou `NULLABLE` — existem
+`PickupOrder` de teste sem data; vira `NOT NULL` de novo quando a tela for a única porta
+de criação.
+
+**Hora como texto, não `time` nativo do Postgres:** `@db.Time` do Prisma volta pro
+TypeScript como objeto `Date` com data de `1970-01-01` embutida, reabrindo a confusão de
+fuso que a D-016 manda evitar — hora sem data ganharia fuso implícito de novo. `@mash/
+shared` já trata hora como string em todo o pacote. `"HH:mm"` com zero à esquerda ordena
+corretamente em comparação lexicográfica de texto, então os CHECK abaixo funcionam no
+banco exatamente como funcionariam com um tipo de hora nativo.
+
+**Cinco `CHECK` — as invariantes de `TimeWindow` impostas no banco, não só no
+TypeScript** (mesmo princípio do `TaxRate`, D-043: a garantia mora onde o dado é
+escrito): formato `"HH:mm"` válido; `dayPeriodId` preenchido exclui horário (start/end
+nulos, `endsNextDay` falso); `endsNextDay` verdadeiro exige start E end preenchidos;
+`endsNextDay` verdadeiro exige `end < start`; `endsNextDay` falso com os dois
+preenchidos exige `end >= start`. Cada comparação que pode receber `NULL` é guardada
+explicitamente com `IS NOT NULL`/`IS NULL` antes de `=`/`<`/`>=` — sem a guarda, o
+Postgres trata `CHECK` que avalia `NULL` como satisfeito, não violado (o mesmo bug real
+já apareceu num `CHECK` parecido do `TaxRate`, D-043, só pego por teste). Testado o caso
+`NULL` de cada uma das cinco (`test/pickup-order-time-window-check.e2e-spec.ts`, 19
+testes).
+
+**PDF (D-027):** `PickupOrderService.generatePdf` passa a chamar `formatTimeWindow` de
+`@mash/shared` quando há algo estruturado (horário ou período), com o rótulo vindo de
+`DayPeriod.name`, e cai em `pickupTimeNote` quando não há nada estruturado (inclusive
+quando `pickupDate` é nulo, já que `TimeWindow` exige data). Sete formas cobertas em
+`test/pickup-order-pdf.e2e-spec.ts` (faixa, exato, até, a partir de, período — rótulo
+`DayPeriod.name` —, cruzando meia-noite, só nota), verificadas contra o PDF real extraído
+de volta com `pdf-parse`, mesmo padrão já usado pelo resto do arquivo.
+
+**Migração `20260910000000_add_day_period_and_pickup_time_window` — nota de processo:**
+`prisma migrate dev --create-only` recusou rodar (ambiente não-interativo desta sessão —
+`Error: Prisma Migrate has detected that the environment is non-interactive`), diferente
+da D-038 (onde rodou e aplicou sozinho antes da edição manual). Contornado com `prisma
+migrate diff --from-schema <schema antes> --to-schema <schema depois> --script` pra
+gerar só o delta real (isolado da migração history, que tinha uma divergência
+pré-existente não relacionada — `IbsCbsTaxSituation`, não investigada, fora do escopo
+desta unidade), migração escrita à mão a partir desse delta (RLS/índice parcial/
+semente/`CHECK` não saem do diff automático, mesmo fluxo de sempre), e aplicada com
+`prisma migrate deploy` (idempotente, aplica só o que falta) contra o banco de dev já
+sincronizado com as 28 migrações anteriores.
+
+**`prisma migrate reset --force`, pedido pra provar que a cadeia inteira de 29
+migrações aplica limpa contra banco vazio, foi bloqueado** — desta vez pelo próprio
+guard de IA do Prisma CLI (`Error: Prisma Migrate detected that it was invoked by Claude
+Code`), não pelo classificador do Claude Code como na D-038. Prisma exige uma
+confirmação explícita do usuário, passada via variável de ambiente
+`PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` com o texto exato da mensagem de
+consentimento — nenhuma instrução anterior conta como consentimento implícito. **Não
+contornado** (instrução explícita do usuário: parar e avisar em vez de contornar).
+Continua pendente de execução manual, ou de uma mensagem de confirmação explícita.
+
+28 testes e2e novos (2 `day-period-rls.e2e-spec.ts` + 19
+`pickup-order-time-window-check.e2e-spec.ts` + 7 novos em
+`pickup-order-pdf.e2e-spec.ts`) — total backend antes do reset: 315 (23 unitários + 292
+e2e). `npm run build`/`npm run lint` sem erro. **Números de depois do reset ainda não
+existem** — reset não executado.
+
+---
+
 ## Pendências
 
 ### Bloqueantes
@@ -2313,15 +2395,9 @@ Focus, aguardando resposta (pendência registrada abaixo).
       ICMS, não por confirmação de campo — margem por fora (markup, `preço × (1 + margem)`)
       dá um número diferente pro mesmo percentual digitado. Não trocar a implementação sem
       essa validação.
-- [ ] **Janela de tempo em linguagem natural — não é `timestamptz` nem `date`, é intervalo
-      com precisão declarada.** "Pela manhã", "primeira hora", "08h às 10h" são a
-      realidade da operação — cada forma tem uma precisão diferente (período do dia /
-      ordem relativa / horário exato), e nenhuma cabe direto num tipo de data do banco.
-      `PickupOrder.pickupWindow` (D-034, `backend/prisma/schema.prisma`) já imprime
-      "janela de coleta" hoje como texto livre (`String?`), sem esse tipo modelado por
-      trás. **Decidir antes da primeira tela** — a ordem de coleta já existe, e telas
-      futuras (agendamento em terminal, follow-up) herdam a decisão errada se ela nascer
-      improvisada numa tela específica em vez de pensada aqui.
+- [x] **Janela de tempo em linguagem natural — resolvida, D-045.** Tipo `TimeWindow` em
+      `@mash/shared` (commit `bf7f5ea`) e materializado no schema (`DayPeriod` +
+      colunas estruturadas em `PickupOrder`, D-045) — deixou de ser pendência.
 - [ ] **`Address` não tem horário de funcionamento.** A D-027 já lista isso como
       conteúdo da ordem de coleta, e o dado real usado pra construir `@mash/shared`
       (`shared/src/time-window/`, planilha operacional de 2025) confirma que é uma
