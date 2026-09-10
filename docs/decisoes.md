@@ -2319,14 +2319,30 @@ histórico da coluna importa). Colunas novas, todas nullable, sem backfill:
 (`BOOLEAN NOT NULL DEFAULT false`), `pickupDayPeriodId` (FK pra `DayPeriod`, `ON DELETE
 RESTRICT`). `pickupDate` (já existia, `NOT NULL`) virou `NULLABLE` — existem
 `PickupOrder` de teste sem data; vira `NOT NULL` de novo quando a tela for a única porta
-de criação.
+de criação. **Registrado como o que é: justificativa de fixture, não de negócio.** Ordem
+de coleta sem data não faz sentido operacional; a restrição foi enfraquecida por
+conveniência de teste, e essa linha existe pra que ninguém precise redescobrir isso.
 
 **Hora como texto, não `time` nativo do Postgres:** `@db.Time` do Prisma volta pro
 TypeScript como objeto `Date` com data de `1970-01-01` embutida, reabrindo a confusão de
 fuso que a D-016 manda evitar — hora sem data ganharia fuso implícito de novo. `@mash/
 shared` já trata hora como string em todo o pacote. `"HH:mm"` com zero à esquerda ordena
 corretamente em comparação lexicográfica de texto, então os CHECK abaixo funcionam no
-banco exatamente como funcionariam com um tipo de hora nativo.
+banco exatamente como funcionariam com um tipo de hora nativo. Isto é uma **exceção
+deliberada à D-016** (que manda `timestamptz` sempre, com `date` puro só pra data de
+calendário) e está registrada como exceção de propósito: "8h no terminal de Itapoá" é
+hora de parede local acordada com um lugar, e guardar como instante exigiria conhecer o
+fuso do endereço no momento da digitação, produzindo precisão que ninguém combinou. O
+instante se deriva quando for preciso (alerta de janela fechando), usando a UF do
+endereço. Sem esse motivo escrito, alguém troca por `timestamptz` daqui a seis meses
+achando que foi descuido.
+
+**`endsNextDay` em vez de uma segunda coluna de data:** 27 células do dado real cruzam
+meia-noite (`22H00 A 00H00`). Com duas datas, toda consulta de "o que tem pra hoje"
+teria que escolher qual das duas usar — e alguém escolheria errado. Com data âncora mais
+sinalizador, a âncora é sempre o dia do serviço, sem ambiguidade em filtro, ordenação e
+agrupamento. O `24:00:00` que o Postgres aceita foi recusado por ser valor de borda que
+se comporta mal em aritmética de intervalo.
 
 **Cinco `CHECK` — as invariantes de `TimeWindow` impostas no banco, não só no
 TypeScript** (mesmo princípio do `TaxRate`, D-043: a garantia mora onde o dado é
@@ -2360,21 +2376,31 @@ semente/`CHECK` não saem do diff automático, mesmo fluxo de sempre), e aplicad
 `prisma migrate deploy` (idempotente, aplica só o que falta) contra o banco de dev já
 sincronizado com as 28 migrações anteriores.
 
-**`prisma migrate reset --force`, pedido pra provar que a cadeia inteira de 29
-migrações aplica limpa contra banco vazio, foi bloqueado** — desta vez pelo próprio
-guard de IA do Prisma CLI (`Error: Prisma Migrate detected that it was invoked by Claude
-Code`), não pelo classificador do Claude Code como na D-038. Prisma exige uma
-confirmação explícita do usuário, passada via variável de ambiente
-`PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` com o texto exato da mensagem de
-consentimento — nenhuma instrução anterior conta como consentimento implícito. **Não
-contornado** (instrução explícita do usuário: parar e avisar em vez de contornar).
-Continua pendente de execução manual, ou de uma mensagem de confirmação explícita.
+**`prisma migrate reset --force` — executado e verificado.** Na sessão da construção,
+foi bloqueado pelo guard de IA do próprio Prisma CLI (`Prisma Migrate detected that it
+was invoked by Claude Code`), não pelo classificador do Claude Code como na D-038 — o
+Prisma exige confirmação explícita do usuário via
+`PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION`, e nenhuma instrução anterior conta como
+consentimento implícito. **Não foi contornado.** Executado em sessão seguinte, com
+consentimento explícito: as 29 migrações aplicaram do zero contra banco vazio, sem erro,
+nenhum `CHECK` se comportando diferente aplicado do zero versus aditivamente. Semente
+dos nove `DayPeriod` conferida por `psql` (role `mash_owner`, bypassa RLS) imediatamente
+após o reset, antes de qualquer teste tocar o banco — nove linhas, `tenantId` nulo,
+batendo com o `INSERT` da migração. Números iguais antes e depois do reset: `shared` 65,
+backend 315 (23 unitários + 292 e2e).
+
+**Achado de infraestrutura de teste:** `TRUNCATE Tenant CASCADE`, usado pra isolamento
+entre arquivos e2e, esvazia a tabela `DayPeriod` **inteira** — inclusive as linhas com
+`tenantId IS NULL`, que não referenciam tenant nenhum. É o comportamento correto do
+Postgres: `TRUNCATE ... CASCADE` derruba a tabela filha inteira, não só as linhas que
+apontam pro truncado. Cada arquivo resemeia via helper com `ON CONFLICT DO NOTHING`,
+mesmo padrão de `OrderStatus`/`TripStatus`/`QuoteCostType`. Consequência: **a suíte e2e
+nunca exercita a semente da migração**, exercita o helper. Só o reset prova a semente.
 
 28 testes e2e novos (2 `day-period-rls.e2e-spec.ts` + 19
 `pickup-order-time-window-check.e2e-spec.ts` + 7 novos em
-`pickup-order-pdf.e2e-spec.ts`) — total backend antes do reset: 315 (23 unitários + 292
-e2e). `npm run build`/`npm run lint` sem erro. **Números de depois do reset ainda não
-existem** — reset não executado.
+`pickup-order-pdf.e2e-spec.ts`). Total: `shared` 65, backend 315 (23 unitários + 292
+e2e), iguais antes e depois do reset. `npm run build`/`npm run lint` sem erro.
 
 ---
 
