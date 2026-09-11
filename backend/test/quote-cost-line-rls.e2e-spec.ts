@@ -15,10 +15,23 @@ async function seedCostBasedQuote(tenantId: string) {
   const openStatus = await admin.quoteStatus.findFirstOrThrow({
     where: { code: 'OPEN' },
   });
+  // Quem pediu a cotação (unidade "vincular cliente à Quote") — NOT
+  // NULL, cria uma Party de uso único só pra satisfazer a coluna: este
+  // teste é sobre RLS/imutabilidade de QuoteCostLine, não sobre Party.
+  const party = await admin.party.create({
+    data: {
+      id: uuidv7(),
+      tenantId,
+      personType: 'COMPANY',
+      name: 'Cliente de teste',
+      cnpj: '11444777000161',
+    },
+  });
   return admin.quote.create({
     data: {
       id: uuidv7(),
       tenantId,
+      partyId: party.id,
       statusId: openStatus.id,
       marginPercentage: '18',
       icmsUf: 'SP',

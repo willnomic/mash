@@ -222,6 +222,10 @@ model Party {
   updatedAt                DateTime        @updatedAt @db.Timestamptz(3)
   addresses                Address[]
   freightRates             FreightRate[]
+  // Cotações que esta Party pediu (unidade "vincular cliente à Quote") —
+  // mesmo padrão de freightRates acima, sem relação nomeada: só existe
+  // uma FK de Quote pra Party.
+  quotes                   Quote[]
   // Três relações nomeadas para o mesmo model — uma Party pode ser
   // sender numa Order e tomador em outra (D-018).
   ordersAsSender           Order[]         @relation("OrderSender")
@@ -497,6 +501,26 @@ model Quote {
   id                   String        @id @db.Uuid
   tenantId             String        @db.Uuid
   tenant               Tenant        @relation(fields: [tenantId], references: [id])
+  // Quem PEDIU a cotação (unidade "vincular cliente à Quote") — é com
+  // essa Party que o operador troca e-mail; NÃO é remetente/
+  // destinatário/tomador fiscal do Order (D-047: esses só se conhecem
+  // quando a operação se monta, no aceite — podem ser partes diferentes
+  // da que pediu, caso real: a Águia pede, a Movecta embarca). Mesmo
+  // nome/padrão de FreightRate.partyId (D-014), não "customerId": já é
+  // como o repositório nomeia "a Party genérica de um registro".
+  // NOT NULL: zero Quote existente no banco de desenvolvimento no
+  // momento desta unidade, então nasce sem NULL a considerar — uma
+  // cotação sem saber de quem é não serve pra nada. Caminho TABELA
+  // deriva de freightRate.partyId (a tarifa já é negociada com uma
+  // Party só); caminho CUSTO exige no contrato de criação
+  // (createCostBasedQuoteSchema). Mesmo tenant não é garantido por FK
+  // composta (mesmo critério de Order.senderId/recipientId/tomadorId e
+  // Quote.previousQuoteId) — RLS garante na prática. Sem GRANT de
+  // coluna: nunca fica reescrevível por mash_app (mesmo regime de
+  // icmsUf/marginPercentage, que também não têm GRANT) — o cliente não
+  // muda o preço, não faz parte do congelamento de close().
+  partyId              String        @db.Uuid
+  party                Party         @relation(fields: [partyId], references: [id])
   // Referência de auditoria à linha de origem (D-014) — não redundante
   // com party/lane: ambos são derived via freightRate. Nulo no caminho
   // por custo (D-041) — não existe FreightRate nesse caminho.
@@ -575,6 +599,9 @@ model Quote {
   costLines            QuoteCostLine[]
 
   @@index([tenantId, statusId])
+  // Acesso que a lista de cotações (fora desta unidade, mas que esta
+  // unidade destrava) vai precisar: cotações de um cliente.
+  @@index([tenantId, partyId])
 }
 
 // Tipo de custo de viagem (D-041) — lista de domínio em tabela, não enum

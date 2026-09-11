@@ -72,6 +72,7 @@ export class QuoteController {
         where: { id },
         include: {
           status: true,
+          party: true,
           costLines: {
             include: { costType: true },
             orderBy: { createdAt: 'asc' },
@@ -93,6 +94,10 @@ export class QuoteController {
       id: quote.id,
       createdAt: quote.createdAt,
       statusCode: quote.status.code,
+      // Quem pediu a cotação (unidade "vincular cliente à Quote") —
+      // parte do estado completo da Quote, como qualquer outra coluna
+      // já devolvida aqui.
+      party: { id: quote.party.id, name: quote.party.name },
       isExpired: isQuoteValidityExpired(quote.validUntil, new Date()),
       validUntil: quote.validUntil,
       icmsUf: quote.icmsUf,

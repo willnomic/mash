@@ -77,6 +77,7 @@ describe('quoteCostLineInputSchema', () => {
 
 describe('createCostBasedQuoteSchema', () => {
   const base = {
+    partyId: '01950000-0000-7000-8000-000000000099',
     icmsUf: 'SP',
     marginPercentage: '20',
     costLines: [validLine],
@@ -84,6 +85,19 @@ describe('createCostBasedQuoteSchema', () => {
 
   it('aceita entrada válida', () => {
     expect(createCostBasedQuoteSchema.safeParse(base).success).toBe(true);
+  });
+
+  it('recusa sem partyId — quem pediu a cotação é obrigatório (unidade "vincular cliente à Quote")', () => {
+    const { partyId: _partyId, ...withoutParty } = base;
+    expect(createCostBasedQuoteSchema.safeParse(withoutParty).success).toBe(
+      false,
+    );
+  });
+
+  it('recusa partyId que não é uuid', () => {
+    expect(
+      createCostBasedQuoteSchema.safeParse({ ...base, partyId: 'x' }).success,
+    ).toBe(false);
   });
 
   it('recusa UF que não existe', () => {

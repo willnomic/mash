@@ -67,6 +67,7 @@ describe('Quote · Row-Level Security (D-012)', () => {
       data: {
         id: uuidv7(),
         tenantId: a.tenant.id,
+        partyId: a.party.id,
         freightRateId: a.freightRate.id,
         statusId: openStatus.id,
         rate: a.freightRate.rate,
@@ -79,6 +80,7 @@ describe('Quote · Row-Level Security (D-012)', () => {
       data: {
         id: uuidv7(),
         tenantId: b.tenant.id,
+        partyId: b.party.id,
         freightRateId: b.freightRate.id,
         statusId: openStatus.id,
         rate: b.freightRate.rate,
@@ -125,6 +127,7 @@ describe('Quote · Row-Level Security (D-012)', () => {
         data: {
           id: uuidv7(),
           tenantId: b.tenant.id,
+          partyId: b.party.id,
           freightRateId: b.freightRate.id,
           statusId: openStatus.id,
           rate: '1',

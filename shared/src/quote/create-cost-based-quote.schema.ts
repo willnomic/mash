@@ -57,6 +57,12 @@ export const quoteCostLineInputSchema = z.object({
 });
 
 export const createCostBasedQuoteSchema = z.object({
+  // Quem PEDIU a cotação (unidade "vincular cliente à Quote") — NOT
+  // NULL no banco (Quote.partyId), exigido aqui pelo mesmo motivo:
+  // cotação sem saber de quem é não serve pra nada. Não é remetente/
+  // destinatário/tomador fiscal (esses entram no aceite, D-047) — só
+  // quem o operador troca e-mail.
+  partyId: z.string().uuid('Cliente inválido'),
   icmsUf: z.enum(BRAZILIAN_STATE_CODES, { message: 'UF inválida' }),
   marginPercentage: marginPercentageSchema,
   costLines: z

@@ -39,6 +39,7 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
 
   async function createOpenQuote() {
     return quoteService.createCostBased({
+      partyId: party.id,
       icmsUf: 'SP',
       marginPercentage: '20',
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],

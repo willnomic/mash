@@ -46,6 +46,7 @@ describe('Quote · caminho CUSTO → Order (accept() cria o pedido)', () => {
 
   async function createClosedCostBasedQuote(quantity?: number) {
     const quote = await quoteService.createCostBased({
+      partyId: party.id,
       icmsUf: 'SP',
       marginPercentage: '20',
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],
@@ -183,6 +184,7 @@ describe('Quote · caminho CUSTO → Order (accept() cria o pedido)', () => {
 
   it('cotação vencida continua recusada e NÃO cria Order (D-046)', async () => {
     const quote = await quoteService.createCostBased({
+      partyId: party.id,
       icmsUf: 'SP',
       marginPercentage: '20',
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],

@@ -23,14 +23,22 @@ import { ApiRequestError } from '@/lib/api-client'
 import { useQuoteCostTypes } from '@/hooks/use-quote-cost-types'
 import { useTaxRatePreview } from '@/hooks/use-tax-rate-preview'
 import { useCreateCostBasedQuote } from '@/hooks/use-create-cost-based-quote'
+import { useParties } from '@/hooks/use-parties'
+import type { CreatedParty } from '@/hooks/use-create-party'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  EntityCombobox,
+  type EntityComboboxHandle,
+} from '@/components/entity-combobox'
+import { CreatePartyModal } from '@/components/create-party-modal'
 
 const EMPTY_LINE = { costTypeId: '', description: '', amount: '' }
 
 const defaultValues: QuoteCostBasedFormValues = {
+  partyId: '',
   icmsUf: '' as BrazilianStateCode,
   marginPercentage: '',
   costLines: [EMPTY_LINE],
@@ -48,6 +56,7 @@ export function QuoteCostBasedPage() {
 
   const costTypes = useQuoteCostTypes()
   const createQuote = useCreateCostBasedQuote()
+  const parties = useParties()
 
   const {
     register,
@@ -72,6 +81,33 @@ export function QuoteCostBasedPage() {
 
   const rates = useTaxRatePreview(watched.icmsUf || undefined)
 
+  // Modal "criar cliente sem sair do fluxo" (D-052), reaproveitado aqui:
+  // quem pediu a cotação (unidade "vincular cliente à Quote") é a
+  // PRIMEIRA coisa que o operador sabe, então o campo abre o mesmo
+  // combobox/modal já usado no aceite, não um componente novo.
+  const [createPartyRequest, setCreatePartyRequest] = useState<{
+    query: string
+  } | null>(null)
+  const partyRef = useRef<EntityComboboxHandle | null>(null)
+
+  // Mesma corrida achada em quote-detail.tsx: o Radix Dialog restaura
+  // foco pro elemento que abriu o modal DEPOIS do onClose/onCreated que
+  // já chamamos — setTimeout(0) empurra nosso .focus() pra depois disso.
+  function focusPartySoon() {
+    setTimeout(() => partyRef.current?.focus(), 0)
+  }
+
+  function closeCreateParty() {
+    setCreatePartyRequest(null)
+    focusPartySoon()
+  }
+
+  function handlePartyCreated(party: CreatedParty) {
+    setValue('partyId', party.id, { shouldValidate: true })
+    setCreatePartyRequest(null)
+    focusPartySoon()
+  }
+
   // Refs pro teclado (D-022): nenhuma ação só no mouse. Foco automático
   // no primeiro campo, Enter avança, adicionar linha sem tirar a mão do
   // teclado.
@@ -83,8 +119,10 @@ export function QuoteCostBasedPage() {
   const pendingFocusIndexRef = useRef<number | null>(null)
   const priceFieldFocusedRef = useRef(false)
 
+  // Cliente é a primeira coisa que o operador sabe (unidade "vincular
+  // cliente à Quote") — foco inicial migrou de UF pra ele.
   useEffect(() => {
-    ufRef.current?.focus()
+    partyRef.current?.focus()
   }, [])
 
   useEffect(() => {
@@ -190,7 +228,11 @@ export function QuoteCostBasedPage() {
           for (const [field, messages] of Object.entries(
             error.error.fieldErrors,
           )) {
-            if (field === 'icmsUf' || field === 'marginPercentage') {
+            if (
+              field === 'partyId' ||
+              field === 'icmsUf' ||
+              field === 'marginPercentage'
+            ) {
               setError(field, { message: messages[0] })
             } else {
               setFormError(messages[0])
@@ -232,6 +274,30 @@ export function QuoteCostBasedPage() {
         noValidate
       >
         <div className="flex min-h-0 flex-1 flex-col gap-3">
+          <div className="flex w-72 flex-col gap-1.5">
+            <Label htmlFor="partyId">Cliente</Label>
+            <EntityCombobox
+              ref={partyRef}
+              id="partyId"
+              value={watched.partyId ?? ''}
+              onChange={(id) =>
+                setValue('partyId', id, { shouldValidate: true })
+              }
+              options={
+                parties.data?.map((p) => ({ id: p.id, label: p.name })) ?? []
+              }
+              isLoading={parties.isLoading}
+              createLabel="cliente"
+              ariaInvalid={Boolean(errors.partyId)}
+              onRequestCreate={(query) => setCreatePartyRequest({ query })}
+            />
+            {errors.partyId && (
+              <p className="text-xs text-destructive">
+                {errors.partyId.message}
+              </p>
+            )}
+          </div>
+
           <div className="flex items-end gap-3">
             <div className="flex w-24 flex-col gap-1.5">
               <Label htmlFor="icmsUf">UF (ICMS)</Label>
@@ -482,6 +548,16 @@ export function QuoteCostBasedPage() {
           </Button>
         </div>
       </form>
+
+      <CreatePartyModal
+        open={createPartyRequest !== null}
+        initialQuery={createPartyRequest?.query ?? ''}
+        existingByCnpj={(cnpj) =>
+          parties.data?.find((p) => p.cnpj === cnpj) ?? undefined
+        }
+        onClose={closeCreateParty}
+        onCreated={handlePartyCreated}
+      />
     </div>
   )
 }

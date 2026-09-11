@@ -38,6 +38,7 @@ describe('Cotação por custo · rotas HTTP (unidade "primeira tela de negócio"
   let app: INestApplication<App>;
   const password = 'senha-forte-123';
   let tenant: { id: string; slug: string };
+  let party: { id: string };
   let cookie: string;
   let freightTypeId: string;
 
@@ -65,6 +66,15 @@ describe('Cotação por custo · rotas HTTP (unidade "primeira tela de negócio"
 
     tenant = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
+    });
+    party = await admin.party.create({
+      data: {
+        id: uuidv7(),
+        tenantId: tenant.id,
+        personType: 'COMPANY',
+        name: 'Cliente A',
+        cnpj: '11444777000161',
+      },
     });
     freightTypeId = (
       await admin.quoteCostType.findFirstOrThrow({ where: { code: 'FREIGHT' } })
@@ -160,6 +170,7 @@ describe('Cotação por custo · rotas HTTP (unidade "primeira tela de negócio"
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
         .send({
+          partyId: party.id,
           icmsUf: 'SP',
           marginPercentage: '100',
           costLines: [{ costTypeId: freightTypeId, amount: '400' }],
@@ -175,6 +186,7 @@ describe('Cotação por custo · rotas HTTP (unidade "primeira tela de negócio"
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
         .send({
+          partyId: party.id,
           icmsUf: 'SP',
           marginPercentage: '20',
           costLines: [
@@ -210,6 +222,7 @@ describe('Cotação por custo · rotas HTTP (unidade "primeira tela de negócio"
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
         .send({
+          partyId: party.id,
           icmsUf: 'SP',
           marginPercentage: '20',
           costLines: [{ costTypeId: freightTypeId, amount: '400' }],

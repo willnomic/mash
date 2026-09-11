@@ -28,6 +28,7 @@ const TRUNCATE = `TRUNCATE TABLE "QuoteCostLine", "Quote", "QuoteCostType", "Quo
 
 describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
   let tenant: { id: string };
+  let party: { id: string };
   let quoteService: QuoteService;
   let freightTypeId: string;
   let tollTypeId: string;
@@ -40,6 +41,17 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
 
     tenant = await admin.tenant.create({
       data: { id: uuidv7(), name: 'Transportadora A', slug: 'transportadora-a' },
+    });
+    // Quem pediu a cotação (unidade "vincular cliente à Quote") — NOT
+    // NULL desde esta unidade, toda Quote criada em teste precisa de uma.
+    party = await admin.party.create({
+      data: {
+        id: uuidv7(),
+        tenantId: tenant.id,
+        personType: 'COMPANY',
+        name: 'Cliente A',
+        cnpj: '11444777000161',
+      },
     });
     freightTypeId = (
       await admin.quoteCostType.findFirstOrThrow({ where: { code: 'FREIGHT' } })
@@ -78,6 +90,7 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
     // antes da margem continua 1000, não 1010. etapa 3, margem 20% por
     // dentro: 1000 / 0.80 = 1250.
     const quote = await quoteService.createCostBased({
+      partyId: party.id,
       icmsUf: 'SP',
       marginPercentage: '20',
       costLines: [
@@ -101,6 +114,7 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
 
   it('linhas de custo ficam gravadas e visíveis — detalhamento, não caixa preta', async () => {
     const quote = await quoteService.createCostBased({
+      partyId: party.id,
       icmsUf: 'SP',
       marginPercentage: '20',
       costLines: [
@@ -130,6 +144,7 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
 
   it('congela: campos de entrada do caminho de custo continuam fora do UPDATE mesmo depois de fechado', async () => {
     const quote = await quoteService.createCostBased({
+      partyId: party.id,
       icmsUf: 'SP',
       marginPercentage: '20',
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],
@@ -153,6 +168,7 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
 
   it('impede apagar Quote do caminho de custo — histórico, D-017', async () => {
     const quote = await quoteService.createCostBased({
+      partyId: party.id,
       icmsUf: 'SP',
       marginPercentage: '20',
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],
@@ -175,15 +191,6 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
         originState: 'SP',
         destinationCity: 'Curitiba',
         destinationState: 'PR',
-      },
-    });
-    const party = await admin.party.create({
-      data: {
-        id: uuidv7(),
-        tenantId: tenant.id,
-        personType: 'COMPANY',
-        name: 'Cliente A',
-        cnpj: '11444777000161',
       },
     });
     const freightRate = await admin.freightRate.create({
@@ -209,6 +216,7 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
         data: {
           id: uuidv7(),
           tenantId: tenant.id,
+          partyId: party.id,
           statusId: openStatus.id,
           freightRateId: freightRate.id,
           rate: freightRate.rate,

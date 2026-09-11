@@ -119,6 +119,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
       .set('Cookie', cookie)
       .set('Origin', 'http://localhost:5173')
       .send({
+        partyId: party.id,
         icmsUf: 'SP',
         marginPercentage: '20',
         costLines: [{ costTypeId: freightTypeId, amount: '400' }],

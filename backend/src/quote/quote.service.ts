@@ -44,6 +44,12 @@ export class QuoteService {
   // no fechamento — na verdade já congela aqui, na criação (D-014,
   // "nunca recalculado depois"). "total" é informado por quem chama: o
   // cálculo real de frete (peso x tarifa, piso mínimo) ainda não existe.
+  //
+  // partyId (unidade "vincular cliente à Quote") não é parâmetro aqui:
+  // uma FreightRate já é negociada com uma Party só (D-014,
+  // FreightRate.partyId) — quem pediu a cotação por tabela é
+  // necessariamente essa mesma Party, derivar evita pedir de novo algo
+  // que o dado de entrada já garante.
   async create(input: { freightRateId: string; total: string }) {
     const db = this.tenantPrisma.db;
 
@@ -58,6 +64,7 @@ export class QuoteService {
       data: {
         id: uuidv7(),
         tenantId: freightRate.tenantId,
+        partyId: freightRate.partyId,
         freightRateId: freightRate.id,
         statusId: openStatus.id,
         rate: freightRate.rate,
@@ -76,6 +83,7 @@ export class QuoteService {
   // cotação nova, não edição) — mesmo critério de imutabilidade do
   // caminho TABELA, só que aplicado às ENTRADAS em vez de à SAÍDA.
   async createCostBased(input: {
+    partyId: string;
     icmsUf: string;
     marginPercentage: string;
     costLines: {
@@ -93,6 +101,7 @@ export class QuoteService {
         data: {
           id: uuidv7(),
           tenantId,
+          partyId: input.partyId,
           statusId: openStatus.id,
           marginPercentage: input.marginPercentage,
           icmsUf: input.icmsUf,

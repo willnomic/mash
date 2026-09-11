@@ -887,3 +887,84 @@ em outro lugar que nem existe ainda — a fragmentação que o produto quer cura
 
 **Fora do escopo, não construído (como pedido):** tela de cadastro completa de `Party`,
 edição de `Party` existente, lista de partes, importação em massa.
+
+## Unidade "vincular cliente à Quote (quem pediu a cotação)"
+
+**Por quê:** sem saber quem pediu, uma cotação fechada não serve pra achar depois nem pra
+ligar cobrando resposta — e a lista de cotações (próxima unidade) não tem por onde
+filtrar/identificar cada linha.
+
+**Investigado antes de modelar (como exigido):**
+- `Quote` não tinha nenhum vínculo com `Party`.
+- `Order.senderId`/`recipientId`/`tomadorId` são FKs simples pra `Party` (D-047), sem FK
+  composta garantindo mesmo tenant — RLS resolve na prática. Segui o mesmo padrão.
+- `Quote` tem `REVOKE UPDATE` geral desde a migração genesis; só colunas com `GRANT
+  UPDATE` explícito são reescrevíveis depois de criadas (`statusId`/`updatedAt`,
+  `icmsRateApplied`/`ibsRateApplied`/`cbsRateApplied`/`total`, `validUntil`, `quantity`).
+- **Achado que exigiu parar:** o banco de desenvolvimento tinha 5 `Quote` existentes
+  (contadas certo só via `mash_owner` — contá-las via `mash_app` sem contexto de tenant
+  dá zero por causa do RLS, erro que cometi antes de notar). Todas caminho CUSTO, sem
+  `freightRateId` pra derivar parte, todas dos tenants `smoke-test`/`smoke-test-2`
+  (verificação em navegador de unidades anteriores). Parado e perguntado ao usuário antes
+  de escolher nullable vs. backfill — decisão: apagar as 5 (com os 2 `Order`/6 `Trip`
+  dependentes) e nascer `NOT NULL` sem backfill inventado.
+
+**Pronto:**
+- `Quote.partyId` (`schema.prisma`) — FK `NOT NULL` pra `Party`, nome/padrão igual a
+  `FreightRate.partyId` (D-014), não `customerId`: já é como o repositório nomeia "a
+  Party genérica de um registro". `ON DELETE RESTRICT` (mesmo tratamento de
+  `Order.senderId`/`recipientId`/`tomadorId`) — apagar o cliente não pode apagar o
+  histórico de cotação (D-017). Sem `GRANT UPDATE`: fica no mesmo regime de
+  `icmsUf`/`marginPercentage`, gravável só no `INSERT`, nunca reescrito — não faz parte
+  do congelamento de `close()` porque o cliente não muda o preço.
+- Migração `20260911020000_add_quote_party` (`migrate diff --script` + `migrate deploy`,
+  ambiente não interativo).
+- `createCostBasedQuoteSchema` (`@mash/shared`) exige `partyId` (uuid) — schema de
+  formulário (`quote-cost-based-form.schema.ts`) herda direto via `.extend()`, sem
+  duplicar.
+- `QuoteService.createCostBased()` recebe `partyId` e grava. `QuoteService.create()`
+  (caminho TABELA) **deriva** de `freightRate.partyId` em vez de pedir de novo — uma
+  `FreightRate` já é negociada com uma `Party` só (D-014), então quem pediu a cotação por
+  tabela é necessariamente essa mesma parte.
+- `GET /quotes/:id` passou a incluir `party: {id, name}` na resposta — parte do "estado
+  completo da Quote" que o endpoint já promete, mesmo tratamento de `costType.name`.
+- Tela `/cotacoes/nova-por-custo`: campo "Cliente" é o PRIMEIRO do formulário (foco
+  inicial migrou de UF pra ele), reaproveitando o `EntityCombobox` e o `CreatePartyModal`
+  da D-052 sem componente novo — mesmo padrão de "+ Criar cliente" do aceite.
+- Testado no navegador: cotação montada escolhendo cliente existente OU criando um novo
+  pelo modal (Esc antes de criar preserva UF/margem/linha de custo já preenchidos e não
+  cria nada); cotação fechada e aceita com filial/remetente/destinatário/tomador —
+  confirmado no banco que `Quote.partyId` (quem pediu) e `Order.tomadorId` (quem paga)
+  são Party DIFERENTES na mesma operação, como o pedido exigia provar.
+- Cabe em 1366×768 sem rolagem, inclusive com o campo Cliente novo — confirmado por
+  iframe isolado.
+- Sem migração de dado: as 5 `Quote` de teste conflitantes foram apagadas (decisão do
+  usuário), não adaptadas.
+- Suítes: `shared` 120→122 (+2: recusa sem `partyId`, recusa `partyId` não-uuid),
+  `backend` 377→377 (nenhum teste novo — só fiação: toda `Quote` de teste ganhou uma
+  `Party` e `partyId`; 20 unit + 357 e2e), `frontend` 6→6 (sem teste novo, verificação
+  manual, mesmo critério das unidades anteriores). Build e lint limpos nos três
+  workspaces. Suíte e2e rodada contra `mash_test` (precisou de `npm run db:test:setup`
+  pra aplicar a migração nova lá também — sem isso a suíte falha com "column partyId does
+  not exist", achado durante esta unidade). Banco de DESENVOLVIMENTO confirmado intacto
+  depois: os mesmos 6 tenants, `Quote`/`Order`/`Party` batendo exatamente com o que esta
+  sessão criou no teste de aceitação (nada de outra sessão foi perdido).
+
+**Decisões tomadas que não estavam no pedido:**
+- Nome do campo `partyId`/`party`, não `customerId` — seguindo o precedente exato de
+  `FreightRate.partyId` já existente no repositório (D-007: convenção do repositório
+  vence preferência pessoal).
+- `QuoteService.create()` (caminho TABELA) deriva `partyId` de `freightRate.partyId` em
+  vez de ganhar um parâmetro novo — evita pedir de novo um dado que a `FreightRate` já
+  garante, e não exigiu tocar nenhum teste do caminho TABELA.
+- `GET /quotes/:id` passou a devolver `party: {id, name}` — não pedido explicitamente,
+  mas consistente com o resto do endpoint (nenhuma coluna nova de `Quote` ficou de fora
+  da resposta "estado completo").
+- Apagar as 5 `Quote` de teste do banco de desenvolvimento em vez de nullable/backfill —
+  confirmado com o usuário antes de agir (ver "achado" acima).
+- `@@index([tenantId, partyId])` em `Quote` — a lista de cotações que esta unidade
+  destrava vai precisar filtrar por cliente; custo zero adicionar agora, na mesma
+  migração que já toca a tabela.
+
+**Fora do escopo, não construído (como pedido):** lista de cotações, tomador fiscal na
+cotação, tela de cadastro completa.
