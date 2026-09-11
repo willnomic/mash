@@ -2,3 +2,5 @@ export * from './time-window/index.js';
 export * from './quote-validity/index.js';
 export * from './quote-pricing/index.js';
 export * from './auth/index.js';
+export * from './brazil/index.js';
+export * from './quote/index.js';

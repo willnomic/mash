@@ -2,6 +2,7 @@ import { Outlet, createRootRoute, createRoute, createRouter } from '@tanstack/re
 import { AppLayout } from '@/layouts/app-layout'
 import { LoginPage } from '@/routes/login'
 import { HomePage } from '@/routes/home'
+import { QuoteCostBasedPage } from '@/routes/quote-cost-based'
 
 // Roteador tipado — TanStack Router, não React Router (D-021/D-048
 // deixaram a escolha entre os dois em aberto). Decisão desta unidade:
@@ -38,9 +39,19 @@ const homeRoute = createRoute({
   component: HomePage,
 })
 
+// Primeira tela de negócio (D-041/D-046/D-048/D-049, unidade "cotação
+// por custo, parte 1"). Caminho por TABELA (D-018) e lista de cotações
+// (D-048, item 3) ainda não existem — sem menu de "Comercial" agrupando
+// nada ainda, só esta rota direta.
+const quoteCostBasedRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/cotacoes/nova-por-custo',
+  component: QuoteCostBasedPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([homeRoute]),
+  appRoute.addChildren([homeRoute, quoteCostBasedRoute]),
 ])
 
 export const router = createRouter({ routeTree })

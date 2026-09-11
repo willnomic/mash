@@ -560,17 +560,76 @@ uma linha de código ainda:
   próprios `.d.ts`; o pacote de tipos era pra API antiga da v1) e removido no mesmo
   passo — não sobrou no `package.json`.
 
-## Unidade "a casca do frontend" (interrompida)
+## Unidade "a casca do frontend"
 
-Pronto: `frontend/` existe (Vite+React+TS+Tailwind+shadcn), sessão do backend migrada de
-JWT no header para cookie httpOnly + tabela `Session` (D-048, autorizado a reabrir
-durante esta unidade), login/logout/`GET /me` funcionando ponta a ponta (testado no
-navegador de verdade), layouts de app e auth, Ctrl+K só navegação, esqueleto de carga.
-Não ficou pronto: nenhuma tela de negócio, sem screenshot/gravação final de aceite, teste
-de fluxo completo no navegador (login→home→logout) interrompido no meio antes de
-confirmar o pós-login visualmente.
-Próximo passo exato: com os dois servidores no ar (`npm run start:dev` no backend,
-`npm run dev` no frontend), repetir o login em `http://localhost:5173/login`
-(`smoke-test`/`smoke@test.com`/`senha-forte-123`, usuário semeado nesta sessão) e
-confirmar visualmente a tela `/` (sidebar+cabeçalho+"Bem-vindo, Smoke User") antes de
-seguir pra qualquer tela nova.
+Pronto, confirmado no navegador de verdade: `frontend/` existe (Vite+React+TS+Tailwind+
+shadcn), sessão do backend migrada de JWT no header para cookie httpOnly + tabela
+`Session` (D-048), login/logout/`GET /me` funcionando ponta a ponta, layouts de app e
+auth, Ctrl+K só navegação, esqueleto de carga, tela `/` pós-login (sidebar+cabeçalho+
+"Bem-vindo, Smoke User") visualmente confirmada. `docs/decisoes.md` ganhou D-049 nessa
+sessão, mas o commit ficou pendente (limite de sessão) — **ainda não commitado**, não
+tocado nesta unidade por instrução explícita de não editar `decisoes.md` aqui.
+
+## Unidade "primeira tela de negócio — cotação por custo, parte 1"
+
+**Escopo:** montar a cotação, ver o preço recalculando ao vivo, salvar como rascunho.
+Fechar/aceitar/recusar (D-046/D-047), lista de cotações e criação de cliente no fluxo são
+a parte 2 — não construídos aqui, de propósito.
+
+**Pronto:**
+- Três rotas HTTP novas, nenhuma existia antes desta unidade:
+  `GET /quote-cost-types` (`QuoteCostTypeController` — lê a tabela de domínio D-020, não
+  chumba lista), `GET /tax-rates/quote-preview?icmsUf=UF` (`TaxRateController` — primeira
+  exposição HTTP de `TaxRateService`; mesmas três buscas que `QuoteService.close()` já
+  fazia: ICMS interna por UF, IBS e CBS nacionais, sempre com "agora" como data —
+  `Quote.icmsUf` é campo único, não par origem/destino, então `findInterstateIcmsRate()`
+  nunca se aplica aqui), `POST /quotes/cost-based` (`QuoteController` — primeiro
+  controller de `Quote`; valida com `createCostBasedQuoteSchema` do `@mash/shared` e
+  chama `QuoteService.createCostBased()`, que **já aceitava margem** desde D-041, sem
+  mudança nenhuma no service).
+- `@mash/shared` ganhou `brazil/` (`BRAZILIAN_STATE_CODES`, as 27 UF — fixo por lei,
+  D-020) e `quote/` (`createCostBasedQuoteSchema`/`quoteCostLineInputSchema`, mais
+  `moneyAmountSchema`/`marginPercentage Schema` exportados pra o frontend derivar sem
+  duplicar regra).
+- Tela `/cotacoes/nova-por-custo`: UF → linhas de custo (tipo lido do banco, valor
+  mascarado pt-BR) → margem OU preço final (os dois editáveis, um recalcula o outro,
+  usando `calculateQuotePricing` de `@mash/shared` — nunca reimplementado; a inversão
+  preço→margem é álgebra nova e pequena, em Decimal, D-013) → salvar rascunho. Teclado
+  completo: foco automático na UF, Enter avança, Enter na última linha de custo cria
+  linha nova e foca o tipo, tudo alcançável só com Tab/Enter (confirmado no navegador
+  sem mouse, exceto o clique final em "Salvar" numa das passadas — Enter no campo de
+  preço não disparou o submit nativo de forma confiável nesta sessão de controle remoto
+  do navegador; a tecla Enter em todo o resto do formulário funcionou). Cabe em
+  1366×768 sem rolar — confirmado por iframe isolado na mesma origem (764px de altura
+  mesmo com 3 linhas de custo, grid de custo com `overflow-y-auto` próprio absorve
+  linhas extras sem empurrar a página).
+- Rascunho nasce OPEN guardando só as ENTRADAS (linhas de custo, margem, UF) — preço e
+  alíquotas continuam nulos até `close()` (parte 2). Confirmado direto no Postgres depois
+  de salvar pelo navegador: `marginPercentage`/`icmsUf` batem com o que foi digitado,
+  `total`/`icmsRateApplied` nulos, linhas de custo com o valor e descrição exatos.
+- Suítes: `shared` 85→96 (+11: schema novo com bordas de validação — UF inválida, margem
+  ≥100%, descrição vazia/só espaço normalizada pra `undefined`), `backend` 334→343
+  (+9: `quote-cost-based-http.e2e-spec.ts`, as três rotas novas, RLS entre tenants,
+  guarda de placeholder de alíquota propagada como 422 com o motivo), `frontend` 6→6
+  (nenhum teste automatizado novo — verificação desta tela foi manual no navegador,
+  como pedido). Build e lint limpos nos três workspaces.
+
+**Achados de sessão, não do código desta unidade:**
+- `backend/.env` não tinha `NODE_ENV` (só o `.env.example` tinha) — sem isso,
+  `TaxRateService` recusa a alíquota placeholder de ICMS mesmo em dev, e a tela nunca
+  calcula nada. Corrigido no `.env` (git-ignored, não vai pro commit).
+- `npm run test:e2e` roda contra o MESMO Postgres do `docker-compose` que os servidores
+  de desenvolvimento usam, e vários arquivos de teste fazem `TRUNCATE ... "Tenant"
+  CASCADE`. Rodar a suíte inteira **apaga** tenant/usuário de teste manual e as tabelas
+  de domínio compartilhadas (`QuoteCostType`, `QuoteStatus` inclusive) — precisou
+  re-semear à mão depois de cada rodada pra continuar testando no navegador. Não é bug
+  desta unidade; é risco pré-existente de dev e e2e compartilharem banco, vale registrar
+  em algum lugar antes que vire surpresa recorrente.
+- `.env` de dependência: `decimal.js` foi adicionado como dependência EXPLÍCITA do
+  `frontend/package.json` (antes só chegava por hoist do workspace, via `@mash/shared`)
+  — necessária pra inversão preço→margem em Decimal (D-013 sem exceção, mesmo em cálculo
+  de UI). Decisão tomada durante a execução, não pedida explicitamente.
+
+**Não ficou pronto / fora do escopo, fica para a parte 2:** fechar cotação (`close()`),
+aceitar/recusar, tela de lista, criação de cliente no fluxo, endpoint de detalhe de uma
+`Quote` existente (o rascunho salvo hoje só é visível direto no banco).

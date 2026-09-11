@@ -44,6 +44,12 @@ export function AppLayout() {
           >
             Início
           </a>
+          <a
+            href="/cotacoes/nova-por-custo"
+            className="rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+          >
+            Cotação por custo
+          </a>
         </nav>
       </aside>
 

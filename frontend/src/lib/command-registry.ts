@@ -12,4 +12,9 @@ export interface CommandEntry {
 
 export const navigationCommands: CommandEntry[] = [
   { id: 'home', label: 'Início', to: '/' },
+  {
+    id: 'quote-cost-based',
+    label: 'Cotação por custo (nova)',
+    to: '/cotacoes/nova-por-custo',
+  },
 ]
