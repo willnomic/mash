@@ -401,6 +401,18 @@ model FreightRate {
 // consegue, em teoria, criar uma linha "global" (tenantId NULL). Aceito
 // deliberadamente: é só um catálogo de status, não dado isolado de outro
 // tenant — diferente de User/Party/etc., onde isso seria grave.
+// Ciclo de vida (unidade "desfecho, validade e revisão"): OPEN (aberta,
+// ainda sem preço final) → CLOSED (preço fechado, nos dois caminhos de
+// precificação) → desfecho do cliente, ACCEPTED ("Aceita") ou REJECTED
+// ("Recusada", reaproveitado da linha antes chamada LOST/"Perdida" —
+// renomeada em 20260910020000_rename_quote_status_lost_to_rejected: o
+// caso "cliente sumiu" não é este status, é derivado (linha abaixo), e
+// com ele fora "Recusada" descreve melhor o que sobrou — não existe
+// status separado pra recusa, ver QuoteService.reject()). EXPIRADA NÃO
+// É STATUS: é derivada (CLOSED, sem desfecho, validUntil já passado) —
+// materializar exigiria job periódico, que cria janela de mentira
+// quando não roda; separar recusa de expiração é o que permite
+// responder "perdi por preço ou por falta de follow-up?".
 model QuoteStatus {
   id        String   @id @db.Uuid
   tenantId  String?  @db.Uuid
@@ -441,10 +453,11 @@ model QuoteStatus {
 //
 // Imutabilidade garantida no banco (D-014): mash_app só tem UPDATE
 // liberado em statusId, icmsRateApplied, ibsRateApplied, cbsRateApplied,
-// total e updatedAt (GRANT por coluna) — freightRateId/rate/
-// minimumFreight/additionalPercentage/marginPercentage/icmsUf nunca
-// mudam depois de criados, nos dois caminhos. DELETE revogado (D-017: é
-// histórico — "perdida" é estado, não remoção).
+// total, validUntil e updatedAt (GRANT por coluna) — freightRateId/rate/
+// minimumFreight/additionalPercentage/marginPercentage/icmsUf/
+// previousQuoteId nunca mudam depois de criados, nos dois caminhos.
+// DELETE revogado (D-017: é histórico — "perdida" é estado, não
+// remoção).
 model Quote {
   id                   String        @id @db.Uuid
   tenantId             String        @db.Uuid
@@ -481,6 +494,43 @@ model Quote {
   // depois do fechamento — soma dos custos + recomposição de imposto +
   // margem (D-041).
   total                Decimal?      @db.Decimal(14, 2)
+  // Validade da proposta ("válida até dia 15") — DATE, não timestamptz:
+  // EXCEÇÃO À D-016, mesmo critério e mesmo tratamento da D-045 (hora de
+  // PickupOrder). Data de calendário acordada com o cliente, não
+  // instante — guardar como timestamptz reabriria a confusão de fuso que
+  // a D-016 existe pra evitar, por um instante que ninguém combinou.
+  // Anulável: cotação sem prazo combinado nunca expira (a expiração é
+  // derivada, ver QuoteStatus acima). Congelada no fechamento
+  // (QuoteService.close()), mesmo mecanismo de GRANT de coluna das
+  // alíquotas — calculada por computeQuoteValidUntil (@mash/shared) a
+  // partir de um prazo em dias ou meses informado por quem fecha.
+  validUntil           DateTime?     @db.Date
+  // Revisão (desconto na mesma negociação) ou recotação (negociação
+  // nova, carga podendo ser a mesma) — um campo só cobre os dois casos,
+  // a distinção é DERIVADA (createdAt da filha antes/depois do
+  // validUntil da mãe), nunca digitada. Mesmo tenant não é garantido
+  // pelo FK em si (Postgres não amarra FK a chave composta aqui, mesmo
+  // critério de CarrierPayment.reversesPaymentId/
+  // ReceivableEvent.reversesReceivableEventId — não pedido, não
+  // construído): quem cria passa pelo QuoteService, que só enxerga
+  // Quote do próprio tenant via RLS (D-012), então uma Quote de outro
+  // tenant nunca é um previousQuoteId alcançável na prática. CHECK na
+  // migração impede autorreferência; ciclo de profundidade > 1 é risco
+  // aceito, sem detecção construída (ver decisoes.md).
+  previousQuoteId      String?       @db.Uuid
+  previousQuote        Quote?        @relation("QuoteRevision", fields: [previousQuoteId], references: [id])
+  revisions            Quote[]       @relation("QuoteRevision")
+  // Quantidade de viagens cotadas (unidade "caminho CUSTO → Order") —
+  // evidência real: e-mail cotando 4 contêineres com lacre individual,
+  // planilha com um processo de 5 caminhões (CT-e 7581-7585). NOT NULL
+  // DEFAULT 1 (toda Quote existente e o caminho TABELA, que nunca
+  // informa isso, continuam válidos sem migração de dado). CHECK > 0 na
+  // migração — sem guarda de NULL: a coluna já é NOT NULL, não há caso
+  // NULL a considerar. Congelada no FECHAMENTO, mesmo mecanismo de GRANT
+  // de coluna de validUntil (D-046) — close() aceita quantity junto do
+  // prazo de validade; sem informar, mantém o valor atual (1, se nunca
+  // mudado). accept() usa este valor pra decidir quantas Trip criar.
+  quantity             Int           @default(1)
   createdAt            DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime      @updatedAt @db.Timestamptz(3)
   orders               Order[]
@@ -750,10 +800,20 @@ model Order {
   // cliente manda uma. Busca via índice trigram (ver migração) — formatos
   // sem prefixo comum, índice btree comum não ajudaria em "contém".
   customerReference    String?
-  quoteId              String?     @db.Uuid
+  // Único (unidade "caminho CUSTO → Order"): uma cotação produz no
+  // máximo um pedido — o banco garante (Postgres trata NULL como
+  // distinto num índice único comum, então N Order com quoteId nulo,
+  // caminho createFromFreightRate, continuam livres).
+  quoteId              String?     @unique @db.Uuid
   quote                Quote?      @relation(fields: [quoteId], references: [id])
-  freightRateId        String      @db.Uuid
-  freightRate          FreightRate @relation(fields: [freightRateId], references: [id])
+  // Nuláveis (unidade "caminho CUSTO → Order"): caminho TABELA continua
+  // preenchendo os quatro sempre; caminho CUSTO (via Quote sem
+  // FreightRate) deixa os quatro nulos — total já cobre o preço nesse
+  // caso. CHECK "Order_pricing_path_exclusive" na migração garante que
+  // não se misturam, mesmo mecanismo do Quote_pricing_path_exclusive
+  // (D-041).
+  freightRateId        String?     @db.Uuid
+  freightRate          FreightRate? @relation(fields: [freightRateId], references: [id])
   senderId             String      @db.Uuid
   sender               Party       @relation("OrderSender", fields: [senderId], references: [id])
   recipientId          String      @db.Uuid
@@ -761,9 +821,9 @@ model Order {
   tomadorId            String      @db.Uuid
   tomador              Party       @relation("OrderTomador", fields: [tomadorId], references: [id])
   // Congelado na criação — cópia, não consulta. Escalas de D-013.
-  rate                 Decimal     @db.Decimal(18, 6)
-  minimumFreight       Decimal     @db.Decimal(14, 2)
-  additionalPercentage Decimal     @db.Decimal(7, 4)
+  rate                 Decimal?    @db.Decimal(18, 6)
+  minimumFreight       Decimal?    @db.Decimal(14, 2)
+  additionalPercentage Decimal?    @db.Decimal(7, 4)
   total                Decimal     @db.Decimal(14, 2)
   // Único campo que legitimamente mudava depois da criação até D-042 —
   // nasce "em andamento", UPDATE liberado a mash_app.
@@ -912,12 +972,32 @@ model Trip {
   // endereço (destino da perna N = origem da perna N+1) é regra de
   // aplicação, não constraint — pode haver exceção operacional.
   sequence             Int
-  destinationAddressId String         @db.Uuid
-  destinationAddress   Address        @relation(fields: [destinationAddressId], references: [id])
-  driverId             String         @db.Uuid
-  driver               Driver         @relation(fields: [driverId], references: [id])
-  vehicleId            String         @db.Uuid
-  vehicle              Vehicle        @relation("TripVehicle", fields: [vehicleId], references: [id])
+  // Preço unitário desta viagem (unidade "caminho CUSTO → Order") —
+  // copiado de Quote.total no momento da criação (accept()), nunca
+  // recalculado depois (D-014, mesmo critério de Order.rate/total).
+  // Escala de valor final (D-013), igual Order.total/QuoteCostLine.amount.
+  // Anulável (corrigido depois do primeiro `migrate deploy` desta
+  // migração, ainda na mesma sessão): NOT NULL quebrou ~20 arquivos de
+  // teste pré-existentes que criam Trip direto pra exercitar outra
+  // coisa (RLS, sequence, status, PickupOrder...) sem contexto de
+  // cotação nenhum — "preço" não é atributo universal de Trip, só das
+  // que nascem de accept().
+  price                Decimal?       @db.Decimal(14, 2)
+  // Nuláveis (unidade "caminho CUSTO → Order", deliberado, não lacuna):
+  // motorista, veículo e destino são preenchidos NA OPERAÇÃO, não na
+  // cotação — accept() cria a Trip sem nenhum dos três. Mesmo motivo
+  // para destinationAddressId quanto para driverId/vehicleId: Quote não
+  // carrega rota nenhuma (nem Lane, nem Address — icmsUf é só a UF do
+  // ICMS, D-041), então não há de onde copiar um endereço no caminho
+  // CUSTO. Sem GRANT restrito aqui: Trip nunca teve REVOKE de UPDATE
+  // (só DELETE, abaixo) — quando existir TripService, atribuir os três
+  // depois já funciona com o GRANT default.
+  destinationAddressId String?        @db.Uuid
+  destinationAddress   Address?       @relation(fields: [destinationAddressId], references: [id])
+  driverId             String?        @db.Uuid
+  driver               Driver?        @relation(fields: [driverId], references: [id])
+  vehicleId            String?        @db.Uuid
+  vehicle              Vehicle?       @relation("TripVehicle", fields: [vehicleId], references: [id])
   trailer1Id           String?        @db.Uuid
   trailer1             Vehicle?       @relation("TripTrailer1", fields: [trailer1Id], references: [id])
   trailer2Id           String?        @db.Uuid

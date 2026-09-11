@@ -2404,6 +2404,413 @@ e2e), iguais antes e depois do reset. `npm run build`/`npm run lint` sem erro.
 
 ---
 
+## D-046 · Ciclo de vida da cotação: desfecho, validade e revisão
+
+**Status:** Fechada · caminho de criação de revisão/recotação não construído (pendência) ·
+prazo de validade opcional no serviço, obrigatoriedade fica na tela (pendência)
+
+**Por quê:** validação de campo com o sócio. A cotação não termina no preço — ela é
+aceita, recusada, ou morre de velhice. Os três desfechos existiam na cabeça do operador e
+em nenhum lugar do modelo: `QuoteStatus` tinha `OPEN`/`CLOSED`/`LOST` desde a D-018, mas
+`LOST` nunca teve significado definido, `markLost()` não tinha chamador nem guarda, e
+validade não existia como campo.
+
+### Expirada não é status — é derivada
+
+**A decisão central desta unidade.** Recusa é decisão do cliente; expiração é o relógio.
+São perguntas de negócio opostas: muita recusa é preço alto (mexe na margem), muita
+expiração é follow-up que não aconteceu (mexe no processo, e é grátis de consertar).
+Colapsar as duas cega justamente onde o conserto é barato.
+
+Mas separar não exige duas linhas de domínio:
+
+| Desfecho | Como o sistema sabe |
+|---|---|
+| Aceita | `statusId` = `ACCEPTED` |
+| Recusada | `statusId` = `REJECTED` |
+| Expirada | preço fechado, sem desfecho, `validUntil` já passado |
+
+**Alternativa recusada: materializar a expiração como status.** Exigiria alguém rodando
+`UPDATE` periódico. O job não roda num fim de semana e na segunda existem cotações mortas
+aparecendo como vivas — e alguém aceita uma. Derivado não tem essa janela: a mesma verdade
+é lida por filtro, contador e tela, o tempo todo, sem ninguém executar nada. Mesmo critério
+da precisão de janela na D-045 (derivada por `precisionOf()`, nunca gravada).
+
+**Alternativa recusada: `REJECTED` novo convivendo com `LOST` sem semântica.** Proposta
+pelo agente durante a execução. Duas linhas para desfecho negativo com a distinção "ainda
+por definir" é exatamente como se estraga uma tabela de domínio — alguém usa a linha vazia,
+atribui um significado próprio, e seis meses depois os dois valores querem dizer coisas
+diferentes dependendo de quem clicou. Reaproveitada a linha existente.
+
+### `LOST` → `REJECTED`: o trabalho foi fixar o significado, não criar linha
+
+`LOST`/"Perdida" existia desde a D-018 sem semântica. Passou a significar **"o cliente
+respondeu não à proposta"** — o que inclui "fechou com o concorrente", mesmo desfecho do
+nosso lado. **Não** inclui "o cliente sumiu": esse é o caso derivado acima.
+
+Com "sumiu" fora, *perdida* descreve mal o que restou. Código e rótulo renomeados para
+`REJECTED`/"Recusada", simétricos com `ACCEPTED`/"Aceita" e com os métodos `accept()`/
+`reject()`. (Registro de processo: o rótulo "Perdida" foi defendido e depois abandonado
+nesta mesma sessão — o argumento a favor dele pressupunha cobrir o cliente que some, o que
+deixou de ser verdade quando a expiração virou derivada.)
+
+Definição registrada em comentário no seed, para o próximo leitor não reinventar.
+
+### `validUntil`: guarda a data, não o prazo
+
+`Quote.validUntil` DATE, anulável, **congelada no fechamento** por `GRANT` de coluna — o
+mesmo mecanismo que já congela `icmsRateApplied`/`ibsRateApplied`/`cbsRateApplied`/`total`
+(D-041/D-043), estendido, não reescrito. `close()` passou a congelar validade nos dois
+caminhos, inclusive TABELA (que antes só mudava status).
+
+**Alternativa recusada: guardar o prazo (`3` + `MESES`) em vez da data.** O que vale contra
+o cliente é a data. Guardar os dois é redundância que pode divergir, e "válida até 15/09"
+é melhor no e-mail que "válida por 3 dias", porque não depende de quando ele leu. O prazo
+como o operador escolheu é entrada da função de cálculo e texto de apresentação, não estado.
+
+**DATE e não `timestamptz` — exceção deliberada à D-016**, mesmo tratamento e mesmo motivo
+da D-045: é data de calendário acordada com um cliente ("válida até dia 15"), não instante.
+Registrada como exceção com motivo, não aplicada em silêncio.
+
+**Aritmética de mês, em `@mash/shared`** (`quote-validity/`, função pura, mesmo padrão de
+`time-window` da D-045): quando o dia não existe no mês de destino, **gruda no último dia
+do mês** — 31/01 + 1 mês = 28/02, e 29/02 em ano bissexto, testado. Não tem resposta óbvia,
+tem resposta escolhida; sem escolher, a biblioteca escolhe sozinha e ninguém revisou.
+
+O predicado de expiração **recebe a data de referência como parâmetro** e nunca lê o
+relógio por dentro — senão não existe teste determinístico.
+
+### `previousQuoteId`: um campo, duas leituras derivadas
+
+FK anulável de `Quote` para `Quote`, com `CHECK` de autorreferência (guarda de `NULL`
+explícita, D-043). Cobre dois casos que parecem exigir modelagem separada:
+
+- filha criada **antes** do `validUntil` da mãe → **revisão** (desconto na mesma negociação)
+- filha criada **depois** → **recotação** (negociação nova, carga podendo ser a mesma)
+
+A distinção sai das datas. Nem campo extra, nem o operador classificando. Motivo de manter
+o vínculo mesmo na recotação: quando o cliente volta pela terceira vez na mesma rota, as
+três aparecem juntas e dá pra ver se estamos sendo usados como cotação de comparação.
+
+O ganho de negócio do lado da revisão: com as duas lado a lado, dá pra medir **quanto de
+margem foi dado para fechar** — multiplicado por milhares de cotações, é a resposta de
+"quanto a gente perde negociando", que hoje não existe em lugar nenhum.
+
+Revisão só pode ser linha nova, e isso não é escolha desta decisão: `QuoteCostLine` é
+imutável desde a criação e `close()` congela preço e alíquotas (D-041). Cotação fechada não
+é editável nem por acidente.
+
+**Mesmo tenant não é garantido por FK composta** — precedente exato de
+`CarrierPayment.reversesPaymentId` e `ReceivableEvent.reversesReceivableEventId`.
+**Ciclo de profundidade maior que 1 é risco aceito**, não construída detecção.
+
+### O que o banco não protege — declarado, não escondido
+
+Três regras vivem só no serviço, porque `CHECK` não enxerga a data de hoje nem o `code`
+por trás de `statusId`:
+
+- não aceitar cotação vencida
+- não dar desfecho a cotação sem preço fechado
+- não dar desfecho a cotação que já tem desfecho
+
+`assertHasClosedPriceWithoutOutcome()` cobre as duas últimas; só `accept()` checa
+vencimento. **Três testes e2e provam deliberadamente que ir direto ao banco com a mesma
+credencial `mash_app` do serviço não esbarra em barreira nenhuma nessas três regras** —
+documentando o buraco em vez de escondê-lo. É diferente do padrão da D-041, onde o `CHECK`
+de caminho exclusivo era testado por fora justamente porque o banco *conseguia* barrar.
+
+### Verificação
+
+Migração 30 (`20260910010000_add_quote_lifecycle`). `shared` 65 → 76, backend 315 → 331
+(arquivo novo `quote-lifecycle.e2e-spec.ts`). Build e lint limpos.
+
+**Achado de higiene, terceira ocorrência:** a migração carregou duas linhas que não eram
+dela (índice trigram já documentado na D-041 e drift equivalente em `IbsCbsTaxSituation`).
+Comentadas na própria migração. Vale uma sessão curta só pra descobrir a origem antes que
+vire folclore da base.
+
+## D-047 · O aceite da cotação cria o pedido (caminho CUSTO → `Order`)
+
+**Status:** Fechada · `Order.total` no caminho CUSTO guarda preço unitário e precisa de
+revisão contra o faturamento (pendência) · `Trip` continua sem coluna de data (pendência,
+bloqueia a tela)
+
+**Por quê:** o `estado.md` registrava uma guarda explícita em `OrderService` recusando o
+caminho CUSTO — `Order` só sabia nascer de tabela de preço. Na prática isso significava que
+a cotação montada do zero, que é o caso de cliente novo e o caso do e-mail real que motivou
+a sessão, não conseguia virar operação. Era o buraco entre o comercial e o operacional.
+
+### O preço é por viagem, e a quantidade nasce na cotação
+
+Evidência de campo, duas fontes independentes:
+
+- **E-mail real** (Águia Translog → Carmelino, set/2026): "R$ 3.000,00 POR CONTAINER" mais
+  "R$ 68,00 POR CONTAINER" de adesivos, e "TOTAL FRETE R$ 3.068,00" — que é o total **de um
+  contêiner**, não dos quatro. O cliente já mandou os 4 contêineres com código de lacre
+  individual junto do pedido de cotação.
+- **Planilha real** (operador, 2025): um processo com 5 caminhões, 5 motoristas e CT-e
+  7581 a 7585. 229 linhas de continuação no ano inteiro.
+
+`Quote.quantity` (`Int`, `DEFAULT 1`, `CHECK > 0`), congelada no fechamento por `GRANT` de
+coluna — mesmo mecanismo de `validUntil` (D-046) e das alíquotas (D-043).
+
+**Nenhuma coluna de agregado.** O valor do pedido é multiplicação, derivada. Alternativa
+recusada por ser dado que pode divergir da origem.
+
+### `accept(quoteId, orderInput)` — cliente e filial entram no aceite, não na cotação
+
+`Order.branchId`/`senderId`/`recipientId`/`tomadorId` são `NOT NULL` e `Quote` não guarda
+nenhum dos quatro (nem no caminho TABELA — `createFromQuote()` sempre recebeu de fora).
+Duas opções foram levantadas durante a execução:
+
+1. `accept()` ganha o mesmo `OrderParties` que já existe — **escolhida**
+2. `Quote` passa a guardar os quatro na criação — **recusada**: muda o contrato de
+   `create()`/`createCostBased()`, fechados na D-041/D-043, e não foi pedido
+
+A 1 acerta a semântica, não só o escopo. **Quem pede a cotação e quem aparece no CT-e são
+coisas diferentes:** no e-mail real, a Águia Translog pede, mas o embarque é da Movecta.
+Remetente, destinatário e tomador fiscal só se conhecem quando a operação se monta — o
+aceite é o momento certo, não um contorno.
+
+Sem default silencioso para nenhum dos quatro: faltando, falha explícita.
+
+### Tudo numa transação só
+
+`accept()` dá o desfecho e cria `Order` + N `Trip` na **mesma** transação. Aceitar e gerar
+pedido não são dois passos com um buraco no meio: ou os dois acontecem, ou nenhum. O núcleo
+foi extraído em `createOrderFromQuoteInTransaction(tx, quote, input)` e é reaproveitado por
+`createFromQuote()` (que abre a própria transação) e por `accept()` (que usa a do desfecho).
+Teste prova: filial inexistente no meio não deixa `Quote` aceita sem pedido, nem `Trip`
+órfã.
+
+`UNIQUE` em `Order.quoteId`. Uma cotação produz no máximo um pedido, e isso o banco
+**consegue** garantir — diferente das três regras de data da D-046, que vivem só no serviço.
+
+### O pedido nasce incompleto, e isso é deliberado
+
+`Trip.driverId`, `vehicleId` e `destinationAddressId` viraram anuláveis. Motorista, veículo
+e destino não existem na cotação e aparecem depois — a planilha do Pedro mostra exatamente
+isso: colunas MOTORISTA/CAMINHÃO/CARRETA preenchidas dias após o processo abrir.
+
+O aceite preenche cliente, rota, quantidade e preço. O resto é operação.
+
+**Cirurgia que "remover a guarda" não previa:** `Order.freightRateId`/`rate`/
+`minimumFreight`/`additionalPercentage` também eram `NOT NULL` e pertencem só ao caminho
+TABELA. Viraram anuláveis, com `CHECK Order_pricing_path_exclusive` espelhando o `CHECK` de
+caminho exclusivo da `Quote` (D-041). Sem isso o `INSERT` quebrava de qualquer forma. O
+mesmo padrão nos dois lados do modelo.
+
+**`Trip.price` anulável:** nasceu `NOT NULL` e quebrou ~20 arquivos de teste
+pré-existentes que criam `Trip` para testar outra coisa (RLS, `sequence`, status,
+`PickupOrder`) sem contexto de cotação. Preço só existe em `Trip` nascida de `accept()`.
+Consequência aceita: nada no banco garante que uma viagem vinda de cotação tenha preço —
+é invariante de serviço, não de schema.
+
+**Guarda nova em `PickupOrderService`:** `Trip` sem motorista/veículo passou a ser estado
+possível, então o PDF de ordem de coleta (D-027/D-034) recusa explicitamente em vez de
+estourar em propriedade nula.
+
+**Status inicial da `Trip`:** reaproveitado `PENDING_RISK_CLEARANCE`, única linha semeada
+que faz sentido para viagem sem motorista atribuído. Nenhum status novo semeado.
+
+### Verificação
+
+Migração 32 (`20260911000000_quote_cost_path_to_order`). Backend 331 → 339 (23 unitários +
+316 e2e), `shared` 76 inalterado. Build, lint e `migrate status` limpos.
+
+Testes que provam por fora do serviço: `UNIQUE` de `Order.quoteId` e o `CHECK` de caminho
+exclusivo do `Order` — mesmo critério da D-041, onde o banco *consegue* barrar.
+
+### Dois achados que esta unidade não resolveu
+
+**`Order.total` guarda o preço unitário no caminho CUSTO**, e o mesmo número está em
+`Trip.price`. Um campo chamado *total* que não é total, duplicado em dois lugares que podem
+divergir. A pergunta que decide o conserto: **o faturamento (D-042) lê `Order.total` ou soma
+as `Trip`?** Se soma, `Order.total` é redundância no caminho CUSTO e vira `RENAME`
+(D-031/D-033). Se lê, a nota de um pedido de 4 contêineres sai com o valor de um.
+
+**`Trip` não tem nenhuma coluna de data.** O bloco central da planilha real é data de
+coleta, data de entrega e data de devolução do vazio — de onde saíram as 1.453 formas que
+motivaram a D-045. A D-045 construiu o tipo e aplicou só em `PickupOrder`. Sem data na
+`Trip`, o sistema não responde "o que tem pra hoje", que é a primeira pergunta do operador
+de manhã. É a última lacuna de modelo antes da primeira tela.
+
+### Nota de processo
+
+Uma migração já aplicada foi editada e o checksum em `_prisma_migrations` realinhado à mão.
+Funciona **porque existe um banco só**. Em ambiente que já tivesse aplicado a versão
+anterior, a coluna continuaria `NOT NULL` e o checksum bateria mentindo. Item para
+`docs/deploy-checklist.md`.
+
+## D-048 · Plano do frontend: contrato, sessão, telas e a primeira delas
+
+**Status:** Fechada · margem por dentro vs. por fora pendente de confirmação numérica com o
+sócio (única coisa que pode invalidar a primeira tela)
+
+**Por quê:** o backend tem cadastro, comercial, operação, terceiros e financeiro, e zero
+tela. Esta decisão fecha as seis perguntas que estavam abertas desde o início da sessão de
+planejamento, para que a construção do frontend não invente convenção tela a tela.
+
+Duas das seis são caras de trocar depois — o contrato de API e os tokens de densidade. As
+outras quatro se corrigem na primeira tela e estão registradas para não serem redecididas.
+
+### 1 · Contrato: schema Zod em `@mash/shared`, sem geração de código
+
+Backend e frontend importam o **mesmo objeto**: o backend valida no DTO, o frontend valida
+no formulário. Uma definição, duas bordas.
+
+**Alternativa recusada: gerar cliente a partir de OpenAPI.** Desenvolvedor solo, as duas
+pontas sobem juntas, e a etapa de geração é mais uma coisa para quebrar num deploy que já
+tem checklist. **`ts-rest` também recusado** pelo mesmo critério: o schema compartilhado
+puro entrega a maior parte do ganho sem dependência nova.
+
+**Regra de fronteira do `shared`:** se o frontend não importa, não é de `shared`. O momento
+em que `shared` vira depósito é quando alguém põe lá algo que só o backend usa "porque é
+compartilhado".
+
+**Schema de formulário é derivado, não o mesmo.** Na tela o valor chega como `"2.800,00"`
+em string com máscara; no contrato é `Decimal`. O schema de contrato mora em `shared` e o
+de formulário se deriva dele por `.extend()`/`.transform()`. Forçar um schema só para as
+duas coisas dá errado nas duas.
+
+**Validadores brasileiros vão para `shared`:** CNPJ, CPF, placa (Mercosul e antiga), CEP.
+
+**Dinheiro: a D-013 continua valendo sem emenda.** `numeric` do Postgres / `Decimal` do
+Prisma, nas três escalas já definidas. A sugestão externa de trafegar centavos em inteiro
+foi **recusada** — é exatamente a alternativa que a D-013 descartou, porque frete não opera
+em duas casas e centavos inteiros obrigariam a inventar fator de escala por caso. A
+armadilha real já está documentada lá: `Decimal` é objeto, `a + b` concatena string
+silenciosamente, sempre `.plus()`/`.times()`/`.dividedBy()`.
+
+**O cálculo da cotação sobe para `shared`.** É o caso exemplar da regra "as duas pontas
+usam": o frontend chama para o preview ao vivo, o backend chama para o valor oficial.
+`QuotePricingCalculator` já é função pura sem banco (D-041) — a mudança é de lugar, não de
+natureza. **O backend sempre recalcula e nunca confia no valor que veio do cliente.**
+
+### 2 · Sessão: cookie `httpOnly`, tenant da sessão, sessão opaca
+
+O frontend nunca vê o token. Estado no cliente é "autenticado ou não" mais os dados do
+usuário, buscados em `/me` na abertura.
+
+- Cookie `httpOnly`, `Secure`, `SameSite=Lax`. **Sem `Domain=.dominio`** — vazaria sessão
+  entre tenants.
+- **Sessão opaca em tabela, não JWT no cookie.** Motivo decisivo: derrubar na hora a sessão
+  de um operador desligado. Com JWT só expirando, não dá.
+- CSRF: validação de `Origin` no backend como mínimo, já que a autenticação é por cookie.
+- Login com `argon2` e limite de tentativas.
+
+**O `tenantId` que alimenta o RLS sai da sessão autenticada, nunca do subdomínio.**
+Subdomínio pode existir como roteamento ou identidade visual; se existir, o backend confere
+se bate com a sessão e rejeita se não bater. Para começar, um host único é mais simples e
+igualmente seguro.
+
+**Já resolvido, registrado para não ser reaberto:** a injeção do tenant por `set_config`
+dentro da transação (`TenantPrisma.transaction()`, D-012/D-035) já existe, e há teste e2e
+provando que o contexto não vaza para a próxima conexão do pool.
+
+### 3 · Inventário de telas — da planilha, não da imaginação
+
+**Comercial:** lista de cotações · cotação nova por custo · cotação nova por tabela ·
+detalhe com revisão
+**Operação:** lista por processo · detalhe do pedido com N viagens · ordem de coleta
+**Cadastro:** partes · endereços · veículos · motoristas · tabelas de preço
+
+**Ordem não fixada além das duas primeiras.** Depois da primeira tela você sabe mais do que
+sabe hoje.
+
+**Alternativa recusada: formulário genérico movido a configuração.** Foi minha recomendação
+inicial e está errada — resolve os primeiros 70% e depois cada exceção vira flag no motor.
+O certo são **componentes genéricos** (campo de moeda, CNPJ com busca automática, endereço
+por CEP, layout padrão) montados em código explícito e curto por cadastro. Igualmente
+rápido de escrever, sem prender.
+
+**Cadastro não é tela — é modal dentro do fluxo.** O operador está na cotação, digita o
+cliente, o cliente não existe, ele cria ali sem sair. O combobox oferece "criar novo", o
+CNPJ preenche razão social e endereço, o CEP preenche o endereço. Isso ataca o teste de
+aceitação mais do que qualquer atalho: é o que faz a cotação no Mash ser mais rápida que o
+e-mail que o operador escreve hoje.
+
+**A lista por processo precisa dar sensação de planilha**, porque é de lá que ele vem:
+navegação por teclado, copiar célula, filtro por coluna, visões salvas por usuário. As 25
+colunas da planilha real não cabem todas visíveis — perguntar ao operador quais ele olha
+todo dia (provavelmente ~8) e quais ele só consulta.
+
+**Pergunta em aberto, registrada:** onde entram CT-e, MDF-e, CIOT e o financeiro na v1. O
+provedor está escolhido e validado com emissão real em homologação (D-044), mas a fronteira
+do que a v1 promete não está escrita. Fiscal é a parte que mais trava cronograma em TMS
+brasileiro.
+
+### 4 · A primeira tela: cotação por custo, dentro da casca
+
+A casca vem junto porque não existe tela sem rota, menu e sessão: sidebar, `Ctrl+K`
+(D-022), autenticação, layout.
+
+**O campo protagonista é o preço final, não a margem.** Evidência de campo: o sócio
+descreveu que o desconto sai da margem — o operador pensa em preço, e a margem é
+consequência. Ele digita 2.800 e vê a margem cair. **Os dois campos são editáveis** (digita
+preço e vê margem, ou digita margem e vê preço), mas o preço é o protagonista visual.
+
+**Por que esta e não a lista por processo:** a lista precisa de `Trip` com data, que não
+existe (D-047), e o modelo operacional tem três perguntas abertas. A cotação está inteira —
+D-041, D-043, D-046, D-047 — e não depende de nenhuma delas. E testa a hipótese que decide
+o produto: o operador calcula na hora, milhares de vezes por ano; se a calculadora na tela
+não for mais rápida que a calculadora de mão dele, isso precisa aparecer agora.
+
+**Pendência que pode invalidar a fórmula:** custo 2.400, preço 3.000 — margem de 20% (por
+dentro, o que está implementado) ou 25% (por fora)? Perguntar pelo número, não pelo
+conceito: as duas convenções soam iguais quando alguém explica em voz alta.
+
+*(Correção de registro: em conversa eu citei "13%" para um preço de 2.800 sobre custo 2.400.
+O número é 14,3% por dentro. Erro de aritmética meu, apontado em revisão externa.)*
+
+### 5 · Design: tokens desde a primeira tela
+
+Variáveis CSS, nunca valor cravado — já é assento reservado para modo escuro na D-022.
+**Densidade é token**, não estilo: altura de linha, espaçamento, fonte de tabela.
+
+**Resolução-alvo com número, não adjetivo: 1366×768 e 1920×1080 com escala de 125%** — as
+duas comuns em transportadora. Se a cotação couber em 1366×768 sem rolar, cabe em qualquer
+lugar. É o teste de densidade da primeira tela, antes de existirem sessenta com o mesmo erro.
+
+**Números:** `font-variant-numeric: tabular-nums` em toda coluna de valor, alinhamento à
+direita, `Intl.NumberFormat('pt-BR')` em todo lugar.
+
+**Atalhos:** registro central, exposto no `Ctrl+K` e nos tooltips. O navegador não deixa
+sobrescrever `Ctrl+N`/`Ctrl+T`/`Ctrl+W`; sequências tipo "G depois C" não conflitam. `Enter`
+avança entre campos nos formulários de operação.
+
+**`Ctrl+K` busca entidade, não só tela:** número da cotação, CNPJ, placa, nome de motorista.
+Exige endpoint de busca; `pg_trgm` já está no projeto (D-038) e o RLS já filtra o resultado.
+
+**Camada de dados — buraco da D-021, agora fechado:** TanStack Query para cache,
+invalidação e estados de carregamento, mais roteador tipado. Sem isso cada tela inventa seu
+próprio jeito de buscar dado.
+
+### 6 · Endpoints: por ação onde há ciclo de vida, CRUD onde é cadastro
+
+`POST /quotes/:id/accept`, não `PATCH /quotes/:id` com `status` no corpo — um `PATCH`
+genérico seria a API contradizendo a imutabilidade por `GRANT` de coluna que existe no banco
+inteiro. **Mas cadastro é CRUD de verdade:** `PATCH /vehicles/:id` é legítimo, respeitados
+os `GRANT`s. Forçar ação ali é cerimônia sem ganho.
+
+**Idempotência:** duplo clique em "aceitar" não pode aceitar duas vezes. A regra já existe
+(D-046), mas a resposta precisa ser `409`, não erro genérico.
+
+**Formato de erro padronizado**, com erros de Zod mapeados por campo, para o formulário
+mostrar a mensagem no lugar certo.
+
+**Regra de sequência: o endpoint nasce junto da tela que o consome, nunca antes.** Endpoint
+sem tela é código não exercitado que parece pronto.
+
+### Recusado nesta decisão
+
+- **`ts-rest`** — ganho marginal sobre Zod compartilhado puro, dependência a mais
+- **Centavos em inteiro** — contraria a D-013, ver acima
+- **Coluna `version` para concorrência otimista** — legítimo em geral, mas a operação tem
+  duas pessoas; dois operadores editando a mesma cotação ao mesmo tempo ainda não é cenário
+  real. Fica como pendência, não como construção.
+
+
 ## Pendências
 
 ### Bloqueantes
@@ -2416,11 +2823,13 @@ e2e), iguais antes e depois do reset. `npm run build`/`npm run lint` sem erro.
 - [ ] Onde entram testes automatizados, e quais primeiro
 - [ ] Defesas concretas contra degradação da base ao longo dos meses
 - [ ] Confirmar leiaute exato do grupo de vale-pedágio do MDF-e com o provedor (D-032)
-- [ ] **Validar com o sócio: margem por dentro ou por fora? (D-041)** `QuotePricingCalculator`
-      hoje aplica margem por dentro (`preço ÷ (1 − margem)`) por analogia com a fórmula do
-      ICMS, não por confirmação de campo — margem por fora (markup, `preço × (1 + margem)`)
-      dá um número diferente pro mesmo percentual digitado. Não trocar a implementação sem
-      essa validação.
+- [x] **Margem por dentro ou por fora? — resolvida, validado com o sócio (D-041, D-048).**
+      Por dentro. Confirmado pelo número, não pela definição: custo 2.400 e preço 3.000
+      são 20% de margem (600 ÷ 3.000), não 25% de markup (600 ÷ 2.400). O sócio usa
+      margem de lucro como indicador, e markup só como métrica de marcação pra definir
+      preço. `QuotePricingCalculator` já aplicava `preço ÷ (1 − margem)` por analogia com
+      a fórmula do ICMS — a implementação estava certa, faltava a confirmação de campo.
+      Nenhuma mudança de código.
 - [x] **Janela de tempo em linguagem natural — resolvida, D-045.** Tipo `TimeWindow` em
       `@mash/shared` (commit `bf7f5ea`) e materializado no schema (`DayPeriod` +
       colunas estruturadas em `PickupOrder`, D-045) — deixou de ser pendência.
@@ -2480,6 +2889,40 @@ e2e), iguais antes e depois do reset. `npm run build`/`npm run lint` sem erro.
       ninguém consegue criar fatura/registrar boleto/pagamento fora de teste ainda —
       falta a camada de aplicação.
 
+- [ ] **Prazo de validade obrigatório na criação da cotação (D-046).** `validityTerm` é
+      opcional em `close()` e cotação sem prazo nunca expira — o padrão é o inseguro, e é
+      silencioso. A regra sobe pra tela, com prazo padrão por tenant.
+- [ ] **Caminho de criação de revisão/recotação (D-046).** `Quote.previousQuoteId` existe no
+      schema, mas `create()`/`createCostBased()` não aceitam — só dá pra preencher indo
+      direto ao banco. Pré-requisito do botão "copiar desta" na tela de cotação.
+- [ ] **Cotação por custo não tem vínculo nenhum com cliente (D-047).** Sem isso não há
+      lista de cotações nem follow-up de expirada — e follow-up era exatamente a razão de
+      separar expirada de recusada na D-046: a métrica existe e fica inútil se não dá pra
+      saber pra quem ligar. Antes da tela de cotações, não depois.
+- [ ] **`Order.total` vs `Trip.price` no caminho CUSTO (D-047).** Mesmo número em dois
+      lugares que podem divergir, e o nome mente (`total` guarda preço unitário). Decide-se
+      checando o que o faturamento (D-042) lê: se soma as `Trip`, `Order.total` vira
+      `RENAME`; se lê `Order.total`, a nota de um pedido de 4 contêineres sai com o valor
+      de um.
+- [ ] **`Trip` não tem nenhuma coluna de data (D-047).** Aplicar a D-045 à viagem: janela na
+      origem e no destino. Hoje o sistema não responde "o que tem pra hoje". Escopo maior do
+      que parece — `Trip` também não tem origem (um destino por viagem, D-018; a origem da
+      perna N é o destino da N−1, regra de aplicação), e a janela de coleta teria que descer
+      de `PickupOrder` pra `Trip`. Três perguntas de negócio ainda abertas antes de
+      construir: transbordo tem quantas janelas por perna (D-037); devolução de vazio como
+      `OccurrenceType` (encerramento de ciclo, sem free time — portuário é v1.1, D-039); e
+      se o endereço de origem é sempre `Address`, com `Party` quando é terminal/porto
+      recorrente e sem vínculo quando é coleta esporádica.
+- [ ] **Trilha de auditoria (D-048).** "Quem mudou o preço dessa cotação?" não tem resposta
+      hoje. A imutabilidade por `GRANT` de coluna impede a mudança, mas não registra autor,
+      tentativa, nem o antes/depois do que é permitido mudar. Não é v1.
+- [ ] **Fronteira fiscal da v1 (D-048).** Onde entram CT-e, MDF-e, CIOT e o financeiro.
+      Provedor escolhido e validado com emissão real em homologação (D-044), mas o que a v1
+      promete não está escrito — e fiscal é a parte que mais trava cronograma em TMS
+      brasileiro.
+- [ ] **Concorrência otimista (coluna `version`, D-048).** Legítimo em geral, recusado por
+      ora: a operação tem duas pessoas, dois operadores editando a mesma cotação ao mesmo
+      tempo ainda não é cenário real. Registrado pra não ser redecidido, não pra construir.
 ### A observar no operacional
 - [ ] Coletar **todas as planilhas paralelas**, com dados reais dentro
 - [ ] Como a apólice de seguro restringe tipos de carga, e se isso precisa estar no

@@ -15,7 +15,12 @@ export async function ensureQuoteStatusesSeeded(admin: PrismaClient) {
   const defaults: [string, string, string][] = [
     ['00000000-0000-7000-8000-000000000001', 'OPEN', 'Aberta'],
     ['00000000-0000-7000-8000-000000000002', 'CLOSED', 'Fechada'],
-    ['00000000-0000-7000-8000-000000000003', 'LOST', 'Perdida'],
+    // Reaproveitado como recusa explícita do cliente (QuoteService.reject(),
+    // unidade "ciclo de vida da Quote"). Renomeado de LOST/"Perdida" pra
+    // REJECTED/"Recusada" em 20260910020000_rename_quote_status_lost_to_rejected
+    // — mesmo id, code/name novos.
+    ['00000000-0000-7000-8000-000000000003', 'REJECTED', 'Recusada'],
+    ['00000000-0000-7000-8000-000000000091', 'ACCEPTED', 'Aceita'],
   ];
 
   for (const [id, code, name] of defaults) {

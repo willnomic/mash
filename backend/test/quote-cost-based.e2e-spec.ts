@@ -8,6 +8,8 @@ import { ensureQuoteCostTypesSeeded } from './helpers/seed-quote-cost-types.js';
 import { QuoteService } from '../src/quote/quote.service.js';
 import { TaxRateService } from '../src/tax-rate/tax-rate.service.js';
 import { TenantPrisma } from '../src/tenant/tenant-prisma.service.js';
+import { OrderService } from '../src/order/order.service.js';
+import { NumberingService } from '../src/numbering/numbering.service.js';
 
 // Roda contra o PostgreSQL real do docker-compose — a garantia provada
 // aqui (D-041: caminho de custo ponta a ponta, com as alíquotas REAIS
@@ -49,9 +51,11 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
       await admin.quoteCostType.findFirstOrThrow({ where: { code: 'FUEL' } })
     ).id;
 
+    const tenantPrisma = tenantPrismaFor(tenant.id);
     quoteService = new QuoteService(
-      tenantPrismaFor(tenant.id),
+      tenantPrisma,
       new TaxRateService(),
+      new OrderService(tenantPrisma, new NumberingService()),
     );
   });
 
@@ -65,7 +69,7 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
 
   it('cria com linhas de custo, fecha, e o preço final bate com as alíquotas REAIS semeadas na migração', async () => {
     // Custo total 820 — mesmo caso conferido à mão do
-    // quote-pricing-calculator.spec.ts (fecha sem dízima em toda etapa):
+    // shared/src/quote-pricing/quote-pricing-calculator.spec.ts (fecha sem dízima em toda etapa):
     // etapa 1, ICMS 18% por dentro (São Paulo, semente da migração):
     // 820 / 0.82 = 1000. etapa 2, IBS 0,1% + CBS 0,9% — calculados
     // (destacados), mas NÃO somados ao preço: TaxRate.composesPrice é

@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Prisma } from '@prisma/client';
 import { calculateTaxOnAgreedValue } from '../src/tax-rate/tax-composition-calculator.js';
-import { calculateQuotePricing } from '../src/quote/quote-pricing-calculator.js';
+import { calculateQuotePricing } from '@mash/shared';
 
 // Não precisa de banco — função pura (D-043). Roda como unitário (npm
-// test), mesmo critério de quote-pricing-calculator.spec.ts.
+// test), mesmo critério de shared/src/quote-pricing/quote-pricing-calculator.spec.ts.
 describe('calculateTaxOnAgreedValue · gross-up não é universal (D-043)', () => {
   it('multiplica, nunca divide: tributo = valor × alíquota, sem gross-up', () => {
     const result = calculateTaxOnAgreedValue({

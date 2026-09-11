@@ -1,7 +1,4 @@
-import { Prisma } from '@prisma/client';
-
-type Decimal = Prisma.Decimal;
-const Decimal = Prisma.Decimal;
+import { Decimal } from 'decimal.js';
 
 export interface QuotePricingCostLineInput {
   amount: Decimal | string;
@@ -55,7 +52,10 @@ export interface QuotePricingResult {
 
 // Pipeline de 4 etapas (D-041): soma dos custos → recomposição do
 // imposto → aplicação da margem → preço. Pura, sem banco — quem persiste
-// (QuoteService.close()) lê as alíquotas de TaxRate e chama esta função.
+// (backend/src/quote/quote.service.ts, close()) lê as alíquotas de
+// TaxRate e chama esta função; o frontend chama a mesma função pro
+// preview ao vivo (D-048) — mudança de lugar, não de comportamento
+// (movida de backend/src/quote/quote-pricing-calculator.ts).
 //
 // A "recomposição do imposto" é, na verdade, DUAS etapas em sequência,
 // não um pool único — correção de 08/09/2026: a primeira versão tratava

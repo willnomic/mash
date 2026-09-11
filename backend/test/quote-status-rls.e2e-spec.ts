@@ -35,15 +35,16 @@ describe('QuoteStatus · RLS com padrão do sistema (D-020)', () => {
     await base.$disconnect();
   });
 
-  it('qualquer tenant enxerga os três status padrão semeados na migração', async () => {
+  it('qualquer tenant enxerga os quatro status padrão semeados na migração', async () => {
     const statuses = await forTenant(tenantA.id).quoteStatus.findMany({
       where: { tenantId: null },
     });
 
     expect(statuses.map((s) => s.code).sort()).toEqual([
+      'ACCEPTED',
       'CLOSED',
-      'LOST',
       'OPEN',
+      'REJECTED',
     ]);
   });
 

@@ -1,8 +1,11 @@
-import { Prisma } from '@prisma/client';
-import { calculateQuotePricing } from '../src/quote/quote-pricing-calculator.js';
+import { Decimal } from 'decimal.js';
+import { calculateQuotePricing } from './quote-pricing-calculator.js';
 
-// Não precisa de banco — pipeline puro (D-041). Roda como unitário
-// (npm test), mesmo critério de freight-rate-decimal.spec.ts.
+// Não precisa de banco — pipeline puro (D-041). Movido de
+// backend/test/quote-pricing-calculator.spec.ts (unidade "mover o
+// cálculo de precificação de cotação pro workspace shared") — mesmos
+// números, só a fonte do Decimal trocou de Prisma.Decimal pra
+// decimal.js direto (shared não tem Prisma).
 describe('QuotePricingCalculator · recomposição de imposto e margem (D-041)', () => {
   it('etapa 1 isolada: ICMS por dentro — preço = base ÷ (1 − alíquota)', () => {
     // IBS/CBS/margem zerados — confere só a etapa 1, isolada das demais.
@@ -199,7 +202,7 @@ describe('QuotePricingCalculator · recomposição de imposto e margem (D-041)',
       marginRatePercent: '20',
     });
 
-    const cost = new Prisma.Decimal('820');
+    const cost = new Decimal('820');
     const wrongPriceWithMarkup = cost.times('1.20'); // markup sobre custo
     const wrongMarginRealized = wrongPriceWithMarkup
       .minus(cost)
@@ -214,8 +217,8 @@ describe('QuotePricingCalculator · recomposição de imposto e margem (D-041)',
   });
 
   it('soma das linhas de custo usa .plus(), nunca operador nativo (D-013)', () => {
-    const a = new Prisma.Decimal('400');
-    const b = new Prisma.Decimal('300');
+    const a = new Decimal('400');
+    const b = new Decimal('300');
 
     // @ts-expect-error — demonstração deliberada: "+" em Decimal cai pra
     // toString() e concatena, não soma (mesmo alerta de

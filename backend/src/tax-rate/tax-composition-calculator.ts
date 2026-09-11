@@ -22,7 +22,7 @@ export interface TaxOnAgreedValueResult {
 
 // Gross-up não é universal (D-043, consulta tributária,
 // docs/consulta-tributaria-2026-09.md): `preço = base ÷ (1 − alíquota)`
-// (calculateQuotePricing, src/quote/quote-pricing-calculator.ts) só vale
+// (calculateQuotePricing, @mash/shared, shared/src/quote-pricing/) só vale
 // quando se parte de um valor líquido-alvo — o caminho de custo (custo +
 // margem, D-041). Quando o preço JÁ É o valor acordado (caminho da
 // FreightRate/TABELA, D-018), a base é o próprio valor e só se

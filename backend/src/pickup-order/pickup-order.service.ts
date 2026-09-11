@@ -71,6 +71,18 @@ export class PickupOrderService {
       },
     });
 
+    // Trip.driverId/vehicleId são nuláveis desde a unidade "caminho CUSTO
+    // → Order" (accept() cria a Trip sem os dois — preenchidos na
+    // operação, não na cotação). Ordem de coleta existe pra informar o
+    // motorista (D-027) — sem os dois atribuídos ainda não há o que
+    // imprimir; guarda explícita em vez de estourar acesso a propriedade
+    // de null mais abaixo.
+    if (pickupOrder.trip.driver === null || pickupOrder.trip.vehicle === null) {
+      throw new Error(
+        'Trip sem motorista/veículo atribuído ainda não pode gerar ordem de coleta.',
+      );
+    }
+
     const data: PickupOrderPdfData = {
       pickupDate: pickupOrder.pickupDate,
       locationLabel: pickupOrder.locationLabel,
