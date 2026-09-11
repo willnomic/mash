@@ -29,10 +29,27 @@ import {
 } from '@/hooks/use-quote-detail'
 import { useParties } from '@/hooks/use-parties'
 import { useBranches } from '@/hooks/use-branches'
+import type { CreatedParty } from '@/hooks/use-create-party'
+import type { CreatedBranch } from '@/hooks/use-create-branch'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  EntityCombobox,
+  type EntityComboboxHandle,
+} from '@/components/entity-combobox'
+import { CreatePartyModal } from '@/components/create-party-modal'
+import { CreateBranchModal } from '@/components/create-branch-modal'
+
+const PARTY_ROLE_FIELDS = ['senderId', 'recipientId', 'tomadorId'] as const
+type PartyRoleField = (typeof PARTY_ROLE_FIELDS)[number]
+
+const PARTY_ROLE_LABEL: Record<PartyRoleField, string> = {
+  senderId: 'Remetente',
+  recipientId: 'Destinatário',
+  tomadorId: 'Tomador',
+}
 
 function formatDate(value: string | null) {
   if (!value) return null
@@ -94,7 +111,66 @@ export function QuoteDetailPage() {
   const [rejectError, setRejectError] = useState<string | null>(null)
 
   const amountRef = useRef<HTMLInputElement | null>(null)
-  const branchRef = useRef<HTMLSelectElement | null>(null)
+  const branchRef = useRef<EntityComboboxHandle | null>(null)
+  const senderRef = useRef<EntityComboboxHandle | null>(null)
+  const recipientRef = useRef<EntityComboboxHandle | null>(null)
+  const tomadorRef = useRef<EntityComboboxHandle | null>(null)
+
+  // Modal "criar cliente sem sair do fluxo" (D-048): guarda QUAL campo
+  // abriu o modal, pra devolver o foco a ele ao fechar (Esc ou depois
+  // de criar) e pra saber onde escrever o id criado. Estado do
+  // acceptForm (os outros campos já preenchidos) não é tocado por abrir
+  // ou fechar o modal — é isso que garante que nada se perde.
+  const [createPartyRequest, setCreatePartyRequest] = useState<{
+    field: PartyRoleField
+    query: string
+  } | null>(null)
+  const [createBranchRequest, setCreateBranchRequest] = useState<{
+    query: string
+  } | null>(null)
+
+  function partyRoleRef(field: PartyRoleField) {
+    if (field === 'senderId') return senderRef
+    if (field === 'recipientId') return recipientRef
+    return tomadorRef
+  }
+
+  // Radix Dialog restaura foco pro elemento que tinha foco quando o
+  // modal abriu (acessibilidade padrão dele) — corre DEPOIS do onClose/
+  // onCreated que já chamamos, então uma chamada síncrona a .focus()
+  // aqui perde a corrida e o foco escapa pra fora da tela (achado real
+  // no navegador: caiu no link "Início" da sidebar). setTimeout(0)
+  // empurra nosso .focus() pra depois da restauração do Radix, que
+  // sempre vence.
+  function focusSoon(ref: React.RefObject<EntityComboboxHandle | null>) {
+    setTimeout(() => ref.current?.focus(), 0)
+  }
+
+  function closeCreateParty() {
+    const field = createPartyRequest?.field
+    setCreatePartyRequest(null)
+    if (field) focusSoon(partyRoleRef(field))
+  }
+
+  function handlePartyCreated(party: CreatedParty) {
+    const field = createPartyRequest?.field
+    if (field) {
+      acceptForm.setValue(field, party.id, { shouldValidate: true })
+    }
+    setCreatePartyRequest(null)
+    if (field) focusSoon(partyRoleRef(field))
+  }
+
+  function closeCreateBranch() {
+    setCreateBranchRequest(null)
+    focusSoon(branchRef)
+  }
+
+  function handleBranchCreated(branch: CreatedBranch) {
+    acceptForm.setValue('branchId', branch.id, { shouldValidate: true })
+    setCreateBranchRequest(null)
+    focusSoon(branchRef)
+  }
 
   const closeForm = useForm<QuoteCloseFormValues, unknown, QuoteCloseFormOutput>({
     resolver: zodResolver(quoteCloseFormSchema),
@@ -378,61 +454,48 @@ export function QuoteDetailPage() {
               <span className="text-sm font-medium">Aceitar cotação</span>
               <div className="flex flex-col gap-1">
                 <Label htmlFor="branchId">Filial</Label>
-                <select
+                <EntityCombobox
+                  ref={branchRef}
                   id="branchId"
-                  {...acceptForm.register('branchId')}
-                  ref={(el) => {
-                    acceptForm.register('branchId').ref(el)
-                    branchRef.current = el
-                  }}
-                  disabled={branches.isLoading}
-                  aria-invalid={Boolean(acceptForm.formState.errors.branchId)}
-                  className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none"
-                  style={{ fontSize: 'var(--density-form-font-size)' }}
-                >
-                  <option value="">Selecione</option>
-                  {branches.data?.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
+                  value={acceptForm.watch('branchId')}
+                  onChange={(id) =>
+                    acceptForm.setValue('branchId', id, { shouldValidate: true })
+                  }
+                  options={
+                    branches.data?.map((b) => ({ id: b.id, label: b.name })) ?? []
+                  }
+                  isLoading={branches.isLoading}
+                  createLabel="filial"
+                  ariaInvalid={Boolean(acceptForm.formState.errors.branchId)}
+                  onRequestCreate={(query) =>
+                    setCreateBranchRequest({ query })
+                  }
+                />
               </div>
 
-              {(['senderId', 'recipientId', 'tomadorId'] as const).map(
-                (field) => (
-                  <div key={field} className="flex flex-col gap-1">
-                    <Label htmlFor={field}>
-                      {field === 'senderId'
-                        ? 'Remetente'
-                        : field === 'recipientId'
-                          ? 'Destinatário'
-                          : 'Tomador'}
-                    </Label>
-                    <select
-                      id={field}
-                      {...acceptForm.register(field)}
-                      disabled={parties.isLoading}
-                      aria-invalid={Boolean(acceptForm.formState.errors[field])}
-                      className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none"
-                      style={{ fontSize: 'var(--density-form-font-size)' }}
-                    >
-                      <option value="">
-                        {parties.isLoading
-                          ? 'Carregando...'
-                          : parties.data?.length
-                            ? 'Selecione'
-                            : 'Nenhuma parte cadastrada'}
-                      </option>
-                      {parties.data?.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ),
-              )}
+              {PARTY_ROLE_FIELDS.map((field) => (
+                <div key={field} className="flex flex-col gap-1">
+                  <Label htmlFor={field}>{PARTY_ROLE_LABEL[field]}</Label>
+                  <EntityCombobox
+                    ref={partyRoleRef(field)}
+                    id={field}
+                    value={acceptForm.watch(field)}
+                    onChange={(id) =>
+                      acceptForm.setValue(field, id, { shouldValidate: true })
+                    }
+                    options={
+                      parties.data?.map((p) => ({ id: p.id, label: p.name })) ??
+                      []
+                    }
+                    isLoading={parties.isLoading}
+                    createLabel="cliente"
+                    ariaInvalid={Boolean(acceptForm.formState.errors[field])}
+                    onRequestCreate={(query) =>
+                      setCreatePartyRequest({ field, query })
+                    }
+                  />
+                </div>
+              ))}
 
               <div className="flex flex-col gap-1">
                 <Label htmlFor="customerReference">
@@ -561,6 +624,22 @@ export function QuoteDetailPage() {
           )}
         </div>
       </div>
+
+      <CreatePartyModal
+        open={createPartyRequest !== null}
+        initialQuery={createPartyRequest?.query ?? ''}
+        existingByCnpj={(cnpj) =>
+          parties.data?.find((p) => p.cnpj === cnpj) ?? undefined
+        }
+        onClose={closeCreateParty}
+        onCreated={handlePartyCreated}
+      />
+      <CreateBranchModal
+        open={createBranchRequest !== null}
+        initialQuery={createBranchRequest?.query ?? ''}
+        onClose={closeCreateBranch}
+        onCreated={handleBranchCreated}
+      />
     </div>
   )
 }

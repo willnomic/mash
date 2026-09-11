@@ -4,3 +4,5 @@ export * from './quote-pricing/index.js';
 export * from './auth/index.js';
 export * from './brazil/index.js';
 export * from './quote/index.js';
+export * from './party/index.js';
+export * from './branch/index.js';

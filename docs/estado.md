@@ -782,3 +782,108 @@ existia pro tenant `smoke-test` — nenhuma tela de cadastro construída ainda, 
 
 **Fora do escopo, não construído (como pedido):** criar cliente no fluxo, revisão/
 recotação, lista de cotações.
+
+## Unidade "criar cliente sem sair do fluxo (modal com CNPJ)"
+
+**Por quê:** hoje nenhum tenant real tem `Party` cadastrada — a parte 2 só funcionava
+porque uma `Party` foi criada à mão no banco. Sem um jeito de criar cliente/filial de
+dentro do aceite, a tela de cotação é inutilizável em produção (sai do fluxo pra cadastrar
+em outro lugar que nem existe ainda — a fragmentação que o produto quer curar).
+
+**Investigado antes de codar (como exigido):**
+- `Party.cnpj`/`Party.cpf` são nullable no schema, mas a CHECK
+  `Customer_document_matches_person_type` amarra `personType='COMPANY'` a `cnpj NOT NULL,
+  cpf NULL` (nome da constraint sobrevive à renomeação Customer→Party) — logo pra esta
+  unidade (só CNPJ, empresa) `cnpj` é obrigatório na prática, mesmo sem `NOT NULL` puro na
+  coluna.
+- Endereço é entidade própria (`Address`), não colunas em `Party` — 1:N, `partyId`
+  obrigatório na FK mas nenhum campo de `Address` é obrigatório do lado de `Party` (a
+  parte pode não ter endereço nenhum).
+- `Party` não representa papel (cliente/fornecedor/motorista) — papel vem de outra
+  modelagem (`OrderParties` referencia `Party` por função no pedido); esta unidade só cria
+  o cadastro genérico.
+- Nenhum validador de CNPJ existia em `@mash/shared` — construído nesta unidade
+  (`shared/src/brazil/cnpj.ts`), não no frontend, pra ficar disponível pro backend
+  revalidar o mesmo dígito verificador.
+- `Branch` é só `id`, `tenantId`, `name` — nenhum campo extra a decidir.
+
+**Pronto:**
+- `isValidCnpj`/`onlyDigits` em `@mash/shared` (`shared/src/brazil/`) — checksum mod-11,
+  rejeita sequência de dígito repetido.
+- `createPartySchema`/`createPartyAddressSchema`/`createBranchSchema` em `@mash/shared`,
+  usados sem duplicação nos dois lados (D-021): `cnpjFieldSchema` normaliza pontuação e
+  valida o dígito verificador; endereço é **tudo ou nada** (schema recusa endereço
+  parcial — se faltar um campo obrigatório, o backend descarta o endereço inteiro em vez
+  de falhar a criação da `Party`, ver abaixo).
+- `POST /parties` — cria `Party` (+ `Address` se completo) em uma transação
+  (`TenantPrisma.transaction`); CNPJ duplicado no tenant vira **409** com
+  `{message, existingParty: {id, name, cnpj}}` (detectado via `P2002` do Prisma, não
+  checado antes — evita corrida). `GET /parties/cnpj/:cnpj` — consulta a BrasilAPI
+  (`https://brasilapi.com.br/api/cnpj/v1/{cnpj}`, verificada por `curl` antes de codar:
+  pública, sem chave, CORS liberado, mas chamada pelo backend mesmo assim, pra manter
+  chamada externa centralizada e com timeout controlado) e nunca lança — timeout de 5s
+  (`AbortController`), 404 vira "não encontrado", qualquer outra falha (rede, timeout,
+  status não-2xx) vira mensagem explícita e `found: false`; a consulta é acionada só no
+  blur do campo CNPJ, depois de validar o dígito verificador localmente (nunca manda dígito
+  inválido pra API).
+- `POST /branches` — cria `Branch` simples.
+- Erros seguem o padrão do `AuthController.login`: `BadRequestException(zod.flatten())` →
+  `{fieldErrors, formErrors}` — nenhum filtro de exceção global criado (item pendente de
+  D-050, fora desta unidade).
+- Modal `CreatePartyModal`/`CreateBranchModal` abre a partir do "+ Criar..." do
+  `EntityCombobox` (combobox novo, sem dependência nova — ver decisões) nos quatro campos
+  do aceite (filial, remetente, destinatário, tomador). Só pede **CNPJ e razão social** —
+  os únicos campos que o operador tem como preencher agora sem ver a tela de cadastro
+  completa; endereço nunca é formulário manual, só auto-preenchido pela consulta ou
+  ausente. Fechar com Esc não cria nada e não perde nada do formulário de aceite (a
+  cotação sendo aceita e o modal são componentes irmãos — o modal só toca o formulário via
+  um `setValue` no sucesso, então o resto do estado do aceite nunca é tocado). Parte criada
+  já vem selecionada no seletor que abriu o modal. CNPJ duplicado oferece "Usar
+  '{nome}'" que seleciona a parte existente em vez de recusar sem saída.
+- Testado sem mouse, do zero (tenant novo `smoke-test-2`, zero `Party` semeada à mão):
+  montar cotação → fechar com prazo → aceitar criando as duas partes pelo modal (uma delas
+  com falha real da BrasilAPI — 403 e depois 429, genuínas, não simuladas — confirmando que
+  a criação segue mesmo com a consulta fora) → filial criada pelo modal → pedido nasce
+  (Número 1, Viagens 1, preço unitário confirmado). Esc no modal verificado não perder
+  nada do formulário nem criar nada.
+- Cabe em 1366×768 com o modal aberto sobre a tela de aceite — confirmado por iframe
+  isolado, inclusive abrindo o modal de verdade dentro do iframe (evento de input
+  sintético, mesma técnica das unidades anteriores).
+- Sem migração — como o pedido antecipava, nada mudou no schema.
+- Suítes: `shared` 104→120 (+16: CNPJ, `createPartySchema`/`createBranchSchema`,
+  endereço parcial recusado), `backend` 358→377 (20 unit + 357 e2e; +6 unit
+  `CnpjLookupService` com `fetch` stubado, +13 e2e `party-branch-http.e2e-spec.ts`:
+  401/400/409/404, CNPJ pontuado normaliza, endereço incompleto não bloqueia criação,
+  CNPJ duplicado não colide entre tenants diferentes), `frontend` 6→6 (sem teste novo —
+  verificação manual no navegador, mesmo critério da parte 2). Build e lint limpos nos
+  três workspaces. Suíte e2e rodada contra `mash_test`; banco de DESENVOLVIMENTO
+  confirmado intacto depois (tenants `smoke-test`/`smoke-test-2`, `OrderStatus`
+  com 3 linhas, `Party` com 2 — nada perdido, D-051).
+
+**Decisões tomadas que não estavam no pedido:**
+- Componente `Dialog`/`DialogContent` genérico (`@radix-ui/react-dialog`, já dependência
+  via `cmdk`/`CommandDialog`) — reaproveitado como base dos dois modais em vez de duplicar
+  a estrutura de portal/overlay/content.
+- `EntityCombobox` próprio em vez de `@radix-ui/react-popover` — dependência nova evitada
+  (D-020/seção 3.1 CLAUDE.md: usar o que já existe); lista fecha por clique fora via
+  listener de `mousedown` no documento, escopado a quando está aberto.
+- `ApiError` (frontend) ganhou campo `body?: unknown` — sem isso o modal não tinha como
+  ler `existingParty` do 409 pra oferecer "usar esta".
+- Fix de foco: o fechamento automático do Radix Dialog restaura foco pro elemento que
+  abriu o modal DEPOIS do `.focus()` manual do componente, então o Radix ganhava a
+  corrida e o foco ia parar num link do menu lateral. Corrigido adiando o `.focus()` de
+  volta pro combobox com `setTimeout(..., 0)`.
+- Tenant `smoke-test-2` criado do zero pro teste de aceitação (em vez de apagar a `Party`
+  já vinculada a um `Order` no `smoke-test` existente) — apagar quebraria integridade
+  referencial de dado de sessão anterior cuja proveniência não é desta unidade (CLAUDE.md
+  seção "executando ações com cautela").
+- Backend tenta de novo sem `address` se o payload inteiro falhar a validação com
+  endereço incluído — assim um endereço mal formado ou incompleto nunca bloqueia a
+  criação da `Party` (a régua era "CNPJ nunca é requisito de bloqueio"; estendida aqui pra
+  "endereço também não").
+- Duplicidade de CNPJ detectada por `P2002` (código do Prisma pra violação de constraint
+  única) dentro da transação, não por um `findFirst` antes de criar — evita corrida entre
+  checar e criar.
+
+**Fora do escopo, não construído (como pedido):** tela de cadastro completa de `Party`,
+edição de `Party` existente, lista de partes, importação em massa.

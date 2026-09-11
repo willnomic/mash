@@ -23,7 +23,7 @@ export type ApiFieldErrors = Record<string, string[]>
 
 export type ApiError =
   | { kind: 'validation'; fieldErrors: ApiFieldErrors; formErrors: string[] }
-  | { kind: 'http'; status: number; message: string }
+  | { kind: 'http'; status: number; message: string; body?: unknown }
 
 export class ApiRequestError extends Error {
   readonly error: ApiError
@@ -76,7 +76,11 @@ async function parseErrorBody(response: Response): Promise<ApiError> {
       ? ((body as Record<string, unknown>).message as string)
       : response.statusText || 'Erro inesperado'
 
-  return { kind: 'http', status: response.status, message }
+  // `body` cru preservado (não só `message`) — quem chama pode precisar
+  // de campo extra específico da rota (ex.: `existingParty` no 409 de
+  // CNPJ duplicado, unidade "criar cliente sem sair do fluxo"). Quem só
+  // lê `.message`/`.status` continua funcionando sem mudança nenhuma.
+  return { kind: 'http', status: response.status, message, body }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
