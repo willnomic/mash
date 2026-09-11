@@ -3,6 +3,7 @@ import { AppLayout } from '@/layouts/app-layout'
 import { LoginPage } from '@/routes/login'
 import { HomePage } from '@/routes/home'
 import { QuoteCostBasedPage } from '@/routes/quote-cost-based'
+import { QuoteDetailPage } from '@/routes/quote-detail'
 
 // Roteador tipado — TanStack Router, não React Router (D-021/D-048
 // deixaram a escolha entre os dois em aberto). Decisão desta unidade:
@@ -49,9 +50,19 @@ const quoteCostBasedRoute = createRoute({
   component: QuoteCostBasedPage,
 })
 
+// Detalhe de UMA cotação por id direto (unidade "cotação por custo,
+// parte 2") — fechar/aceitar/recusar, e o link que a parte 1 abre
+// depois de salvar o rascunho. Não é lista de cotações (fora de
+// escopo): sem busca, sem navegação entre várias, só o link direto.
+const quoteDetailRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/cotacoes/$id',
+  component: QuoteDetailPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([homeRoute, quoteCostBasedRoute]),
+  appRoute.addChildren([homeRoute, quoteCostBasedRoute, quoteDetailRoute]),
 ])
 
 export const router = createRouter({ routeTree })

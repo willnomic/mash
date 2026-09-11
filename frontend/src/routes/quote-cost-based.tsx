@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useForm, useFieldArray, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Decimal } from 'decimal.js'
@@ -40,13 +41,10 @@ const defaultValues: QuoteCostBasedFormValues = {
 // (D-046/D-047) e a lista de cotações são a parte 2 — não construídos
 // aqui.
 export function QuoteCostBasedPage() {
+  const navigate = useNavigate()
   const [formError, setFormError] = useState<string | null>(null)
   const [priceError, setPriceError] = useState<string | null>(null)
   const [priceDisplay, setPriceDisplay] = useState('')
-  const [savedQuote, setSavedQuote] = useState<{
-    id: string
-    createdAt: string
-  } | null>(null)
 
   const costTypes = useQuoteCostTypes()
   const createQuote = useCreateCostBasedQuote()
@@ -57,7 +55,6 @@ export function QuoteCostBasedPage() {
     handleSubmit,
     setError,
     setValue,
-    reset,
     formState: { errors, isSubmitting },
   } = useForm<
     QuoteCostBasedFormValues,
@@ -182,10 +179,11 @@ export function QuoteCostBasedPage() {
     setFormError(null)
     try {
       const created = await createQuote.mutateAsync(data)
-      setSavedQuote(created)
-      reset(defaultValues)
-      setPriceDisplay('')
-      ufRef.current?.focus()
+      // Rascunho salvo — a parte 2 (fechar/aceitar/recusar, D-050) mora
+      // na tela de detalhe. Navega em vez de resetar o formulário: não
+      // tem mais razão pra montar outra cotação na mesma tela, o
+      // caminho natural é seguir com a que acabou de nascer.
+      await navigate({ to: '/cotacoes/$id', params: { id: created.id } })
     } catch (error) {
       if (error instanceof ApiRequestError) {
         if (error.error.kind === 'validation') {
@@ -470,12 +468,6 @@ export function QuoteCostBasedPage() {
           {formError && (
             <p className="text-sm text-destructive" role="alert">
               {formError}
-            </p>
-          )}
-          {savedQuote && !formError && (
-            <p className="text-sm text-foreground" role="status">
-              Rascunho salvo às{' '}
-              {new Date(savedQuote.createdAt).toLocaleTimeString('pt-BR')}.
             </p>
           )}
 

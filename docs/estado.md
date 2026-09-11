@@ -700,3 +700,85 @@ D-045 com `DayPeriod`). O ambiente de trabalho foi perdido duas vezes numa sess�
 **Não tocado, de propósito:** `docs/decisoes.md` (instrução explícita desta unidade) e
 `docs/deploy-checklist.md` continuam com a entrada de D-049 pendente de commit de uma
 sessão anterior — não é desta unidade, não misturado no commit.
+
+## Unidade "cotação por custo, parte 2 — fechar com prazo e aceitar criando o pedido"
+
+**Por quê:** a parte 1 (D-050) só monta e salva rascunho. Sem fechar/aceitar/recusar, a
+cotação nunca produz o pedido — a hipótese do produto (calculadora mais rápida que a de
+mão) fica sem completar o ciclo até a operação.
+
+**Bloqueio confirmado antes de construir (a pergunta que o pedido marcou como mais
+importante):** `accept()` exige `OrderParties` (filial + remetente/destinatário/tomador),
+e `Quote` no caminho CUSTO não guarda nenhum dos quatro (D-047) — e não existia rota HTTP
+nenhuma pra `Party`/`Branch`, só os models Prisma. Confirmado com o usuário antes de
+escrever código: construir `GET /parties`/`GET /branches` (leitura simples, sem
+paginação/busca/criação) pra popular os quatro seletores — não é "criar cliente no
+fluxo" (isso continua fora, depende de modelagem que não existe). Consequência aceita:
+hoje nenhum tenant real tem `Party` cadastrada (zero tela de cadastro construída), então
+a tela mostra "Nenhuma parte cadastrada" até essa modelagem existir — verdade do
+produto, não bug.
+
+**Pronto:**
+- `GET /parties`, `GET /branches` (`PartyController`/`BranchController`, módulos novos)
+  — leitura mínima, `active: true` em `Party` (D-017).
+- `GET /quotes/:id` — estado completo de UMA cotação por id direto (não é lista, D-050
+  já tinha deixado isso de fora): `statusCode`, `isExpired` DERIVADO a cada leitura
+  (`isQuoteValidityExpired`, nunca um status próprio, nunca job periódico), linhas de
+  custo, alíquotas aplicadas, `total`, e o pedido (se aceita). **Decisão:** não recompõe
+  o detalhamento de imposto em R$ (ICMS/IBS/CBS) — `TaxRate.composesPrice` usado no
+  fechamento não fica congelado em nenhuma coluna própria de `Quote`, só as alíquotas
+  (%) e o `total` ficam; recalcular agora com o `composesPrice` de hoje arriscaria um
+  número que parece preciso e pode não ser o que valeu no fechamento (CLAUDE.md 1.6). A
+  tela mostra % aplicada e total, nunca um R$ de imposto inventado.
+- `POST /quotes/:id/close` — prazo (`validityTerm`) **obrigatório no contrato** (o
+  service continua aceitando opcional por compatibilidade, D-046, mas a rota da tela
+  sempre manda). Usa `computeQuoteValidUntil` de `@mash/shared` sem reimplementar.
+- `POST /quotes/:id/accept` — idempotente: a segunda tentativa vira **409** ("Cotação já
+  foi aceita"), não 500 nem erro genérico — testado de verdade (e2e com duplo POST, e no
+  navegador com `fetch` direto contra uma cotação já aceita, ainda com
+  `branchId`/`Party` inválidos, confirmando que a guarda de idempotência dispara ANTES
+  de tocar `orderInput`). Cotação vencida vira 422 com "vencida" na mensagem.
+- `POST /quotes/:id/reject` — reaproveita `REJECTED`/"Recusada" (D-046); vencida pode
+  ser recusada normalmente, só `accept()` tem a guarda de vencimento.
+- Nenhuma migração — como o pedido antecipava, tudo já existia no schema (D-046/D-047).
+- Tela `/cotacoes/$id` (link direto, não lista): cinco estados — Rascunho, Fechada
+  (válida até DD/MM), Fechada e vencida (derivado, vermelho, só "Recusar" disponível,
+  motivo explícito na tela), Aceita (mostra número do pedido/viagens/preço unitário),
+  Recusada — cada um com ação própria, verificados um a um no navegador (inclusive
+  vencida, simulada movendo `validUntil` pro passado direto no banco, e recusada).
+  Fechar/aceitar/recusar são irreversíveis: botão primário só abre confirmação ("Tem
+  certeza?"), a ação de fato só dispara no segundo botão — nenhum dos três é acionável
+  batendo Enter num campo de texto (os botões de confirmação inicial são `type="button"`,
+  não `type="submit"`, então não existe submissão implícita de formulário pra interceptar).
+  A parte 1 (`quote-cost-based.tsx`) mudou o pós-salvar: navega pra `/cotacoes/$id` em
+  vez de resetar o formulário — agora existe um lugar pra ir.
+- Cabe em 1366×768 sem rolar nos cinco estados — confirmado por iframe isolado (764px de
+  altura), mesma técnica da parte 1.
+- Suítes: `shared` 96→104 (+8: `closeQuoteSchema`/`acceptQuoteSchema`, bordas de
+  validação), `backend` 343→358 (+15: `quote-lifecycle-http.e2e-spec.ts`, as seis rotas
+  novas — `GET/POST` de `Quote`, `GET /parties`, `GET /branches` — idempotência do
+  aceite provada por fora, formato de erro por rota), `frontend` 6→6 (sem teste novo,
+  verificação manual no navegador, como pedido). Build e lint limpos nos três
+  workspaces. Suíte e2e rodada contra `mash_test`; depois, tenant `smoke-test`, `Order`
+  e `Quote` confirmados intactos no banco de DESENVOLVIMENTO.
+
+**Achado de sessão, não desta unidade:** `OrderStatus` e `TripStatus` (`tenantId` nulo,
+semeados via migração) estavam **vazios no banco de desenvolvimento** — dano de antes da
+separação de banco de teste (unidade anterior), nunca restaurado, e bloqueava `accept()`
+de verdade (não só no teste). Restaurado à mão, junto com uma `Party` de teste (zero
+existia pro tenant `smoke-test` — nenhuma tela de cadastro construída ainda, D-047).
+
+**Decisões tomadas que não estavam no pedido:**
+- `GET /parties`/`GET /branches` — confirmado com o usuário antes de construir (ver
+  acima), não assumido em silêncio.
+- `@HttpCode(200)` explícito em `close`/`accept`/`reject` — são ações sobre um recurso
+  que já existe, não criação (o padrão do Nest pra `POST` é 201, certo pra
+  `/quotes/cost-based`, errado semanticamente pros três verbos de ação).
+- Distinguir "já tem desfecho" (`accept()`/`reject()` lançam a mesma mensagem genérica)
+  em dois códigos HTTP diferentes: 409 só quando o desfecho existente é `ACCEPTED`
+  (idempotência de verdade — a tela lê como "já aceita"); 422 quando é `REJECTED`
+  (tentar aceitar uma cotação já recusada é erro de negócio, não repetição da mesma
+  ação). Exigiu uma leitura extra do `Quote` dentro do `catch`, sem tocar o service.
+
+**Fora do escopo, não construído (como pedido):** criar cliente no fluxo, revisão/
+recotação, lista de cotações.
