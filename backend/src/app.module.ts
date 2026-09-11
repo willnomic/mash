@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ClsModule } from 'nestjs-cls';
+import cookieParser from 'cookie-parser';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
@@ -27,4 +28,13 @@ import { PickupOrderModule } from './pickup-order/pickup-order.module.js';
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  // Aqui, não em main.ts: main.ts nunca roda nos testes e2e (eles montam
+  // a aplicação direto de AppModule via Test.createTestingModule), então
+  // um app.use(cookieParser()) só em main.ts deixaria req.cookies
+  // undefined em todo teste HTTP — TenantGuard (D-048) depende disto pra
+  // ler o cookie de sessão.
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(cookieParser()).forRoutes('*');
+  }
+}

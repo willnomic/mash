@@ -559,3 +559,18 @@ uma linha de código ainda:
   instalado por engano (a v2 do `pdf-parse` é reescrita como classe e publica os
   próprios `.d.ts`; o pacote de tipos era pra API antiga da v1) e removido no mesmo
   passo — não sobrou no `package.json`.
+
+## Unidade "a casca do frontend" (interrompida)
+
+Pronto: `frontend/` existe (Vite+React+TS+Tailwind+shadcn), sessão do backend migrada de
+JWT no header para cookie httpOnly + tabela `Session` (D-048, autorizado a reabrir
+durante esta unidade), login/logout/`GET /me` funcionando ponta a ponta (testado no
+navegador de verdade), layouts de app e auth, Ctrl+K só navegação, esqueleto de carga.
+Não ficou pronto: nenhuma tela de negócio, sem screenshot/gravação final de aceite, teste
+de fluxo completo no navegador (login→home→logout) interrompido no meio antes de
+confirmar o pós-login visualmente.
+Próximo passo exato: com os dois servidores no ar (`npm run start:dev` no backend,
+`npm run dev` no frontend), repetir o login em `http://localhost:5173/login`
+(`smoke-test`/`smoke@test.com`/`senha-forte-123`, usuário semeado nesta sessão) e
+confirmar visualmente a tela `/` (sidebar+cabeçalho+"Bem-vindo, Smoke User") antes de
+seguir pra qualquer tela nova.

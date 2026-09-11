@@ -1,24 +1,30 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { ClsService } from 'nestjs-cls';
 import { IS_PUBLIC_KEY } from '../auth/public.decorator.js';
-import type { JwtPayload } from '../auth/jwt-payload.js';
+import { SessionService } from '../auth/session.service.js';
+import { SESSION_COOKIE_NAME } from '../auth/session-cookie.js';
 
-// Global (registrado como APP_GUARD em TenantModule): toda rota exige token
-// válido, exceto as marcadas com @Public(). tenantId vem sempre do token,
-// nunca de body, query string ou header escolhido pelo cliente (D-012) —
-// é o guard, e só o guard, que decide o que vai para o ClsService.
+// Métodos que não mudam estado — dispensados da checagem de Origin
+// abaixo (D-048).
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// Global (registrado como APP_GUARD em TenantModule): toda rota exige
+// sessão válida, exceto as marcadas com @Public(). tenantId vem sempre
+// da sessão, nunca de body, query string ou header escolhido pelo
+// cliente (D-012) — é o guard, e só o guard, que decide o que vai para
+// o ClsService.
 @Injectable()
 export class TenantGuard implements CanActivate {
   constructor(
-    private readonly jwt: JwtService,
+    private readonly sessions: SessionService,
     private readonly cls: ClsService,
     private readonly reflector: Reflector,
   ) {}
@@ -33,22 +39,30 @@ export class TenantGuard implements CanActivate {
     }
 
     const req = context.switchToHttp().getRequest<Request>();
-    const header = req.headers.authorization;
-    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+
+    // CSRF (D-048): "validação de Origin no backend como mínimo, já que
+    // a autenticação é por cookie" — SameSite=Lax já barra a maior parte
+    // dos casos; isto cobre o resto, só em método que muda estado.
+    if (!SAFE_METHODS.has(req.method)) {
+      const origin = req.headers.origin;
+      if (!origin || origin !== process.env.FRONTEND_ORIGIN) {
+        throw new ForbiddenException('Origem não permitida');
+      }
+    }
+
+    const token = req.cookies?.[SESSION_COOKIE_NAME];
     if (!token) {
-      throw new UnauthorizedException('Token ausente');
+      throw new UnauthorizedException('Sessão ausente');
     }
 
-    let payload: JwtPayload;
-    try {
-      payload = await this.jwt.verifyAsync<JwtPayload>(token);
-    } catch {
-      throw new UnauthorizedException('Token inválido');
+    const session = await this.sessions.validate(token);
+    if (!session) {
+      throw new UnauthorizedException('Sessão inválida ou expirada');
     }
 
-    this.cls.set('tenantId', payload.tenantId);
-    this.cls.set('userId', payload.sub);
-    this.cls.set('role', payload.role);
+    this.cls.set('tenantId', session.tenantId);
+    this.cls.set('userId', session.userId);
+    this.cls.set('role', session.role);
 
     return true;
   }

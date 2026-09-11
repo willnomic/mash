@@ -1,19 +1,13 @@
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { SessionService } from './session.service.js';
 
 @Module({
-  imports: [
-    JwtModule.register({
-      secret: process.env.JWT_SECRET,
-      signOptions: { expiresIn: '8h' }, // um turno de trabalho (contexto.md)
-    }),
-  ],
   controllers: [AuthController],
-  providers: [AuthService],
-  // Exporta JwtModule para o TenantGuard verificar o mesmo token com a
-  // mesma configuração — uma definição só (D-3.2).
-  exports: [JwtModule],
+  providers: [AuthService, SessionService],
+  // Exporta SessionService para o TenantGuard validar o mesmo tipo de
+  // sessão (D-3.2, uma definição só) — substitui o JwtModule da D-029.
+  exports: [SessionService],
 })
 export class AuthModule {}

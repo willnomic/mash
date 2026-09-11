@@ -87,6 +87,7 @@ model Tenant {
   receivableEvents     ReceivableEvent[]
   attachments          Attachment[]
   ibsCbsTaxSituations  IbsCbsTaxSituation[]
+  sessions             Session[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
@@ -136,9 +137,43 @@ model User {
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
   // Anexos que este usuário enviou (D-042) — "quem enviou" do metadado.
   uploadedAttachments Attachment[]
+  sessions     Session[]
 
   @@unique([tenantId, email])
   @@index([tenantId, active])
+}
+
+// Sessão opaca (D-048, unidade "a casca do frontend" — substitui o JWT
+// stateless que existia antes): o frontend nunca vê isto além do cookie
+// httpOnly que o carrega. Revogável na hora (DELETE desta linha), o que
+// um JWT só-expirando não permite — motivo decisivo da D-048 pra
+// derrubar a sessão de um operador desligado sem esperar o token vencer.
+//
+// `token` é a própria chave primária: 32 bytes aleatórios
+// (`crypto.randomBytes`, SessionService.create), não UUID v7 (D-015).
+// Deliberado: D-015 é sobre identificador de LINHA (ordenável, sem
+// problema de previsibilidade porque RLS protege o dado); aqui o valor É
+// o segredo portador da autenticação — precisa da entropia de um token
+// dedicado, não da de um identificador.
+//
+// RLS (D-012): SELECT público, mesmo mecanismo de Tenant.slug (D-029) —
+// validar uma sessão precisa funcionar ANTES de existir tenant definido
+// na conexão (é a própria sessão que informa qual é o tenant). INSERT/
+// DELETE continuam isolados ao próprio tenant (login já resolveu o
+// tenant antes de criar a linha; revogar relê o token via SELECT
+// público pra descobrir o tenant, só então apaga escopado).
+model Session {
+  token     String   @id
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  // Um turno de trabalho (contexto.md) — mesma duração que o JWT tinha.
+  expiresAt DateTime @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([userId])
 }
 
 // Individual/Company em inglês (D-007): "pessoa física/jurídica" não é

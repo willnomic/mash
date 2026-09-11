@@ -23,6 +23,18 @@ const admin = new PrismaClient({
 
 const TRUNCATE = `TRUNCATE TABLE "PickupOrderItem", "PickupOrder", "Trip", "RiskClearance", "Order", "Quote", "FreightRate", "Lane", "Address", "Party", "Vehicle", "Driver", "Branch", "Tenant", "User" CASCADE`;
 
+// Extrai só "session=<token>" do Set-Cookie da resposta de login — mesmo
+// helper de auth.e2e-spec.ts (D-048: cookie httpOnly, não mais token no
+// corpo).
+function sessionCookieFrom(res: { headers: Record<string, unknown> }): string {
+  const setCookie = res.headers['set-cookie'] as string[] | undefined;
+  const sessionCookie = setCookie?.find((c) => c.startsWith('session='));
+  if (!sessionCookie) {
+    throw new Error('login não devolveu cookie de sessão');
+  }
+  return sessionCookie.split(';')[0];
+}
+
 describe('PickupOrder · rota HTTP (D-027)', () => {
   let app: INestApplication<App>;
   const password = 'senha-forte-123';
@@ -79,7 +91,7 @@ describe('PickupOrder · rota HTTP (D-027)', () => {
 
     const res = await request(app.getHttpServer())
       .get(`/pickup-orders/${seed.pickupOrder.id}/pdf`)
-      .set('Authorization', `Bearer ${login.body.accessToken}`)
+      .set('Cookie', sessionCookieFrom(login))
       .expect(200);
 
     expect(res.headers['content-type']).toBe('application/pdf');
@@ -112,7 +124,7 @@ describe('PickupOrder · rota HTTP (D-027)', () => {
     // tenant errado.
     await request(app.getHttpServer())
       .get(`/pickup-orders/${seedB.pickupOrder.id}/pdf`)
-      .set('Authorization', `Bearer ${login.body.accessToken}`)
+      .set('Cookie', sessionCookieFrom(login))
       .expect(500);
   });
 });

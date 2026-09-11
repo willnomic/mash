@@ -73,4 +73,22 @@ describe('RLS · guarda de schema (D-012)', () => {
     expect(selectPolicy?.qual?.trim()).toBe('true');
     expect(policies.some((p) => p.cmd !== 'SELECT')).toBe(true);
   });
+
+  it('Session.token é a terceira exceção deliberada, mesmo mecanismo (D-048)', async () => {
+    const policies = await admin.$queryRaw<
+      { cmd: string; qual: string | null }[]
+    >`
+      SELECT cmd, qual
+      FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = 'Session'
+    `;
+
+    // D-048: validar uma sessão precisa funcionar antes de existir
+    // tenant definido na conexão — é a própria sessão que informa qual
+    // é o tenant. SELECT público, INSERT/DELETE isolados (mesmo
+    // mecanismo exato de Tenant.slug acima).
+    const selectPolicy = policies.find((p) => p.cmd === 'SELECT');
+    expect(selectPolicy?.qual?.trim()).toBe('true');
+    expect(policies.some((p) => p.cmd !== 'SELECT')).toBe(true);
+  });
 });
