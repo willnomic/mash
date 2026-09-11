@@ -437,7 +437,10 @@ Rodam contra PostgreSQL real via `docker compose up -d db` — RLS, `EXCLUDE`, `
 
 Comando: `npm install` agora roda na RAIZ do repositório (workspaces) — não mais dentro de
 `backend/`. Depois disso, `npm run test:e2e` (unitário: `npm test`), dentro de `backend/`,
-continuam iguais. `npx prisma generate` precisa ser rodado à mão depois do `npm install`
+continuam iguais **exceto que `npm run test:e2e` agora exige `backend/.env.test` — ver
+unidade "separar o banco de teste do de desenvolvimento", abaixo — copiar de
+`.env.test.example` e rodar `npm run db:test:setup` uma vez antes da primeira execução**.
+`npx prisma generate` precisa ser rodado à mão depois do `npm install`
 da raiz (ver "Repositório: npm workspaces" acima — npm 11 não roda mais esse
 install-script sozinho).
 
@@ -633,3 +636,67 @@ a parte 2 — não construídos aqui, de propósito.
 **Não ficou pronto / fora do escopo, fica para a parte 2:** fechar cotação (`close()`),
 aceitar/recusar, tela de lista, criação de cliente no fluxo, endpoint de detalhe de uma
 `Quote` existente (o rascunho salvo hoje só é visível direto no banco).
+
+## Unidade "separar o banco de teste do de desenvolvimento"
+
+**Por quê:** achado da unidade anterior — `npm run test:e2e` rodava contra o mesmo
+Postgres do `docker-compose` que o servidor de desenvolvimento usa, e vários arquivos
+fazem `TRUNCATE ... "Tenant" CASCADE`, apagando tenant/usuário semeados à mão e as
+tabelas de domínio compartilhadas (`tenantId IS NULL` — mesmo comportamento já visto na
+D-045 com `DayPeriod`). O ambiente de trabalho foi perdido duas vezes numa sessão só.
+
+**Pronto:**
+- `mash_test` — banco NOVO, MESMO cluster/roles do banco de desenvolvimento
+  (`mash_owner`/`mash_app`, `docker-compose.yml` já existente, porta 5433). Não é um
+  Postgres separado: `mash_app` é role de CLUSTER (sobrevive a reset), então só faltava
+  `GRANT CONNECT` no banco novo. Migrações rodadas contra `mash_test` produzem GRANTs e
+  RLS **byte a byte idênticos** aos de `mash` — confirmado comparando
+  `information_schema.role_table_grants`/`role_column_grants` das duas bases (44 linhas
+  de coluna em `Quote`, mesmas em ambas) — porque os dois bancos rodam a MESMA sequência
+  de migrações, que já criam RLS/GRANT via `ALTER DEFAULT PRIVILEGES` (D-012). Nenhum
+  GRANT foi reescrito à mão.
+- `backend/.env.test` (git-ignored, exemplo committed em `.env.test.example`) —
+  `DATABASE_URL`/`DATABASE_URL_APP` apontando pra `mash_test`, mesmas credenciais de
+  `mash_owner`/`mash_app` do `.env` de dev.
+- `backend/scripts/prepare-test-db.mjs` (`npm run db:test:setup`) — cria `mash_test` se
+  não existir (idempotente, não recria se já existir), garante `GRANT CONNECT` pra
+  `mash_app`, roda `prisma migrate deploy`. Não existe passo de "semente" separado — as
+  migrações já semeiam as tabelas de domínio (D-020/D-041/D-043/D-045), então rodar as
+  migrações de novo é rodar a semente de novo.
+- `backend/test/setup-e2e-env.ts` — `vitest.config.e2e.ts` aponta pra ele em vez de
+  `dotenv/config`. Lê `.env.test` com `dotenv.parse()` (nunca `process.env` — nenhuma
+  ambiguidade com o que o shell já tiver exportado, a mesma classe de problema do
+  `NODE_ENV` vazio vencendo o `.env`). **Falha fechada, duas guardas, verificadas de
+  verdade rodando a suíte cada vez:** (1) sem `.env.test`, a suíte recusa TODOS os 60
+  arquivos com mensagem clara, zero teste roda; (2) `.env.test` com a MESMA
+  `DATABASE_URL`/`DATABASE_URL_APP` do `.env` de dev, mesma recusa — protege contra o
+  arquivo copiado por engano, não só a ausência dele. Nenhuma das duas depende de
+  `NODE_ENV`.
+- **A verificação que importa:** suíte e2e inteira rodada contra `mash_test` (329
+  testes) e, depois, tenant `smoke-test`, usuário `smoke@test.com`, as cinco linhas de
+  `QuoteCostType` e a `Quote` salva pela tela na unidade anterior — todos ainda intactos
+  em `mash` (banco de dev), confirmado direto no Postgres. Não precisou resemear nada.
+- Suítes (números exigidos, confirmados iguais): `shared` 96, `backend` 343 (14
+  unitários + 329 e2e), `frontend` 6. Build e lint limpos nos três workspaces. Nenhum
+  teste, asserção ou lógica de aplicação foi alterado — só o carregamento de ambiente.
+
+**Decisões tomadas que não estavam no pedido:**
+- Banco novo no MESMO cluster, não um segundo container/Postgres separado — mais simples
+  e é o que garante GRANTs idênticos de graça (mesmas roles, mesmas migrações).
+- Guarda extra além do "falha se `.env.test` não existir": recusa também se a URL bater
+  com a do `.env` de dev — o pedido citava só a ausência do arquivo, mas o acidente mais
+  provável é copiar o `.env` errado, não esquecer de criar um.
+- `npm run db:test:setup` não faz `DROP`/`migrate reset` — é idempotente (cria se faltar,
+  sempre roda `migrate deploy`). Dado sujo de execução anterior já se resolve pelo
+  `TRUNCATE`+resemeadura que cada arquivo de teste já faz no próprio `beforeEach` (não
+  mudado nesta unidade); "sujo" tratado aqui é só "schema ausente ou atrasado". Evita
+  bater na regra do `CLAUDE.md` sobre `migrate reset` exigir confirmação explícita a cada
+  execução — mesmo sendo um banco descartável por natureza.
+- `docs/deploy-checklist.md` ganhou um item novo: banco de teste nunca pode existir na
+  plataforma de produção, e se um CI for criado depois, ele precisa do próprio
+  `.env.test` contra um Postgres efêmero — nunca o banco de produção "só pra testar uma
+  vez".
+
+**Não tocado, de propósito:** `docs/decisoes.md` (instrução explícita desta unidade) e
+`docs/deploy-checklist.md` continuam com a entrada de D-049 pendente de commit de uma
+sessão anterior — não é desta unidade, não misturado no commit.

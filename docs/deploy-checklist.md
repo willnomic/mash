@@ -99,6 +99,19 @@ nada aqui foi verificado em produção ainda.
       quando essas migrações rodarem, elas falham. Criar o role é *pré-requisito* do
       primeiro deploy, não um passo qualquer da lista.
 
+- [ ] **Banco de teste (`mash_test`) nunca deve existir na plataforma de produção,
+      e `NODE_ENV` nunca deve chegar como `development`/`test` em produção.**
+      Unidade "separar o banco de teste do de desenvolvimento": a suíte e2e agora
+      usa `backend/.env.test` (git-ignored, só local) e recusa rodar se essa URL
+      bater com a de `.env` — mas isso protege contra rodar teste contra
+      produção, não o contrário. Se um pipeline de CI for criado depois, ele
+      precisa do próprio `.env.test`, apontando pra um Postgres efêmero do próprio
+      CI (`npm run db:test:setup` funciona contra qualquer Postgres — cria/migra
+      o banco indicado, não depende do cluster local) — nunca o banco de produção
+      reaproveitado "só para testar uma vez". Mesma família de risco do item de
+      `NODE_ENV` já registrado em `.env.example` (D-041): variável de ambiente
+      herdada errado não avisa, só falha em silêncio.
+
 ---
 
 ## Não coberto por este checklist
