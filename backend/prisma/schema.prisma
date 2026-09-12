@@ -90,6 +90,7 @@ model Tenant {
   sessions                 Session[]
   groups                   Group[]
   groupPermissions         GroupPermission[]
+  settings                 TenantSettings?
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
@@ -112,6 +113,56 @@ model Branch {
   invoices         Invoice[]
 
   @@index([tenantId])
+}
+
+// Configuração do tenant (unidade "configuração do tenant — prazo
+// padrão de validade da cotação") — D-020 já previa um SettingsService
+// "desde o primeiro dia", nunca construído até agora: esta é a
+// primeira configuração real do produto.
+//
+// Tabela PRÓPRIA, não colunas soltas em Tenant nem key-value genérico:
+// Tenant já carrega config FISCAL (regime tributário, identidade
+// legal — editada num fluxo diferente, por quem cuida de fiscal, não
+// pelo gestor nesta tela); um blob "chave/valor" custaria tipo e
+// leitura clara por nada em troca, quando só existe UMA configuração
+// hoje ("não crie configuração nenhuma além desta", o pedido). Mesmo
+// padrão de CarrierProfile (D-032): tabela filha 1:1, existência
+// OPCIONAL — a linha só nasce quando o gestor salva pela primeira vez
+// (TenantSettingsService faz upsert, nunca criada junto do tenant em
+// TenantsService.create()), porque "tenant não configurou nada" (linha
+// ausente) e "tenant configurou algo" são estados DIFERENTES que a
+// aplicação precisa distinguir — se a linha nascesse automaticamente
+// com todo campo nulo, não teria como diferenciar de "configurou e
+// depois apagou", e inventaria uma linha que ninguém pediu (D-052).
+//
+// defaultQuoteValidityUnit NULO = ninguém decidiu — o operador digita
+// o prazo toda vez (nunca um padrão de fábrica inventado). ='NEVER' =
+// decisão EXPLÍCITA de que cotação nunca vence, amount fica nulo.
+// DAYS/MONTHS/YEARS exige amount — CHECK abaixo garante essas três
+// formas e só elas (D-043: guarda explícita de NULL), mesmo mecanismo
+// de Quote_pricing_path_exclusive.
+model TenantSettings {
+  id                         String             @id @db.Uuid
+  tenantId                   String             @unique @db.Uuid
+  tenant                     Tenant             @relation(fields: [tenantId], references: [id])
+  defaultQuoteValidityUnit   QuoteValidityUnit?
+  defaultQuoteValidityAmount Int?
+  createdAt                  DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime           @updatedAt @db.Timestamptz(3)
+}
+
+// Fixo pelo SISTEMA (o cálculo de data que @mash/shared sabe fazer),
+// não lista que o tenant estende (D-020) — diferente de QuoteCostType,
+// não existe caminho de negócio pra um tenant "inventar uma unidade
+// nova" de prazo. Espelha QuoteValidityTerm['unit'] (@mash/shared) +
+// 'NEVER', que só existe aqui — Quote.validUntil nunca grava a UNIDADE
+// que gerou a data, só a data em si (D-046), então este enum não
+// aparece em nenhuma outra tabela.
+enum QuoteValidityUnit {
+  DAYS
+  MONTHS
+  YEARS
+  NEVER
 }
 
 // Papel define o que se pode fazer (D-009) — lógica separada de tenant, que

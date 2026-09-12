@@ -1,16 +1,22 @@
 import { z } from 'zod';
 
-// Cinco estados da tela (unidade "lista de cotações", D-046/D-051) —
-// quatro são o QuoteStatus.code real (OPEN/CLOSED/ACCEPTED/REJECTED);
-// CLOSED_EXPIRED é só um valor de FILTRO, nunca gravado (D-046: a
-// expiração é derivada — preço fechado, sem desfecho, validUntil
-// passado). O backend traduz CLOSED_EXPIRED em
-// "statusId=CLOSED AND validUntil < hoje", e CLOSED (sem o "_EXPIRED")
-// passa a significar só a fatia válida — não o status bruto do banco.
+// Seis estados da tela (unidade "configuração do tenant" acrescenta o
+// sexto) — quatro são o QuoteStatus.code real
+// (OPEN/CLOSED/ACCEPTED/REJECTED); CLOSED_EXPIRED e CLOSED_NO_EXPIRY
+// são valores de FILTRO, nunca gravados (D-046: a expiração é
+// derivada — preço fechado, sem desfecho, validUntil passado ou nulo).
+// O backend traduz:
+//   CLOSED             → statusId=CLOSED AND validUntil >= hoje (tem prazo, válida)
+//   CLOSED_EXPIRED     → statusId=CLOSED AND validUntil < hoje (tem prazo, vencida)
+//   CLOSED_NO_EXPIRY   → statusId=CLOSED AND validUntil IS NULL ("não vence", decisão explícita)
+// validUntil nulo nunca cai em CLOSED nem em CLOSED_EXPIRED por
+// acidente — é o próprio ponto desta unidade: antes, nulo caía junto
+// com "válida" (mesmo balde), escondendo que a cotação nunca vence.
 export const QUOTE_LIST_STATUS_FILTERS = [
   'OPEN',
   'CLOSED',
   'CLOSED_EXPIRED',
+  'CLOSED_NO_EXPIRY',
   'ACCEPTED',
   'REJECTED',
 ] as const;

@@ -51,7 +51,10 @@ describe('Quote · caminho CUSTO → Order (accept() cria o pedido)', () => {
       marginPercentage: '20',
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],
     });
-    return quoteService.close(quote.id, { quantity });
+    return quoteService.close(quote.id, {
+      validity: { type: 'NEVER' },
+      quantity,
+    });
   }
 
   beforeEach(async () => {
@@ -164,7 +167,9 @@ describe('Quote · caminho CUSTO → Order (accept() cria o pedido)', () => {
       freightRateId: freightRate.id,
       total: '600',
     });
-    const closed = await quoteService.close(quote.id);
+    const closed = await quoteService.close(quote.id, {
+      validity: { type: 'NEVER' },
+    });
 
     const order = await quoteService.accept(closed.id, orderInput());
 
@@ -190,7 +195,7 @@ describe('Quote · caminho CUSTO → Order (accept() cria o pedido)', () => {
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],
     });
     const closed = await quoteService.close(quote.id, {
-      validityTerm: { unit: 'DAYS', amount: -1 },
+      validity: { type: 'TERM', term: { unit: 'DAYS', amount: -1 } },
     });
 
     await expect(

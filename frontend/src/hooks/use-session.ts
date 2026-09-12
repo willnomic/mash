@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { PermissionCode } from '@mash/shared'
+import type { PermissionCode, QuoteValidityDecision } from '@mash/shared'
 import { api } from '@/lib/api-client'
 
 // Espelha o que GET /me devolve (backend/src/me/me.controller.ts) —
@@ -22,6 +22,12 @@ export interface SessionUser {
     id: string
     name: string
     slug: string
+    // Unidade "configuração do tenant": vem aqui, não só em GET
+    // /tenant-settings (settings.view) — todo usuário que pode fechar
+    // cotação (quote.close) precisa do padrão pra pré-encher o
+    // formulário, não só quem administra a configuração. NULO = tenant
+    // não configurou nada; operador digita o prazo toda vez.
+    defaultQuoteValidity: QuoteValidityDecision | null
   }
 }
 

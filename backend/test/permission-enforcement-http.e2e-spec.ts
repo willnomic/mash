@@ -181,7 +181,7 @@ describe('Permissão · o backend recusa (unidade "papéis e permissões")', () 
       .expect(200);
   });
 
-  it('gestor: também cria cotação e vê cadastro (tudo do operador) — a diferença de configuração não tem endpoint ainda pra testar aqui, é a próxima unidade', async () => {
+  it('gestor: também cria cotação e vê cadastro (tudo do operador)', async () => {
     await createUser({ email: 'gestor@a.com', groupName: 'Gestor' });
     const cookie = await loginAs('gestor@a.com');
 
@@ -196,6 +196,51 @@ describe('Permissão · o backend recusa (unidade "papéis e permissões")', () 
         costLines: [{ costTypeId: freightTypeId, amount: '400' }],
       })
       .expect(201);
+  });
+
+  // Unidade "configuração do tenant": settings.view/settings.change são
+  // as permissões que a D-055 semeou de propósito pra esta tela — a
+  // guarda é no backend (GET/POST /tenant-settings), não só a rota
+  // escondida na casca.
+  it('operador: 403 em GET e POST /tenant-settings — não tem settings.view nem settings.change', async () => {
+    await createUser({ email: 'operador@a.com', groupName: 'Operador' });
+    const cookie = await loginAs('operador@a.com');
+
+    await request(app.getHttpServer())
+      .get('/tenant-settings')
+      .set('Cookie', cookie)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/tenant-settings')
+      .set('Cookie', cookie)
+      .set('Origin', 'http://localhost:5173')
+      .send({ defaultQuoteValidity: { type: 'NEVER' } })
+      .expect(403);
+  });
+
+  it('gestor: configura o prazo padrão via POST /tenant-settings e lê de volta em GET', async () => {
+    await createUser({ email: 'gestor@a.com', groupName: 'Gestor' });
+    const cookie = await loginAs('gestor@a.com');
+
+    await request(app.getHttpServer())
+      .post('/tenant-settings')
+      .set('Cookie', cookie)
+      .set('Origin', 'http://localhost:5173')
+      .send({
+        defaultQuoteValidity: { type: 'TERM', term: { unit: 'DAYS', amount: 15 } },
+      })
+      .expect(201);
+
+    const res = await request(app.getHttpServer())
+      .get('/tenant-settings')
+      .set('Cookie', cookie)
+      .expect(200);
+
+    expect(res.body.defaultQuoteValidity).toEqual({
+      type: 'TERM',
+      term: { unit: 'DAYS', amount: 15 },
+    });
   });
 
   it('isAdmin ignora grupo e tem tudo, mesmo sem grupo nenhum atribuído', async () => {

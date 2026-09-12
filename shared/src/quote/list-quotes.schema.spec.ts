@@ -17,15 +17,18 @@ describe('listQuotesQuerySchema', () => {
     ).toBe(true);
   });
 
-  it('recusa status fora dos cinco valores da tela', () => {
+  it('recusa status fora dos seis valores da tela', () => {
     expect(
       listQuotesQuerySchema.safeParse({ status: 'CLOSED_LOST' }).success,
     ).toBe(false);
   });
 
-  it('aceita CLOSED_EXPIRED — valor de filtro, não status gravado', () => {
+  it('aceita CLOSED_EXPIRED e CLOSED_NO_EXPIRY — valores de filtro, nunca status gravado', () => {
     expect(
       listQuotesQuerySchema.safeParse({ status: 'CLOSED_EXPIRED' }).success,
+    ).toBe(true);
+    expect(
+      listQuotesQuerySchema.safeParse({ status: 'CLOSED_NO_EXPIRY' }).success,
     ).toBe(true);
   });
 

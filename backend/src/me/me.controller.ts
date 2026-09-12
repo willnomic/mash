@@ -2,6 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { NoPermissionRequired } from '../auth/permission.decorator.js';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
+import { toQuoteValidityDecision } from '../tenant-settings/quote-validity-mapping.js';
 
 @Controller('me')
 export class MeController {
@@ -21,6 +22,16 @@ export class MeController {
   // isAdmin/permissions vêm de CLS (TenantGuard já resolveu, mesma
   // consulta que valida a sessão) — a casca esconde o que a lista de
   // permissões não cobre (item 5).
+  //
+  // tenant.defaultQuoteValidity (unidade "configuração do tenant"): vem
+  // aqui, não só em GET /tenant-settings (settings.view) — o prazo
+  // padrão precisa pré-encher o fechamento de QUALQUER usuário que
+  // pode fechar cotação (quote.close), não só de quem pode ver a tela
+  // de configuração. settings.view/settings.change continuam
+  // protegendo a TELA de gerenciar a configuração; o VALOR já
+  // configurado não é segredo — é usado o tempo todo pelo operador do
+  // dia a dia, do mesmo jeito que o nome do tenant já era devolvido
+  // aqui sem exigir permissão nenhuma.
   @NoPermissionRequired()
   @Get()
   async me() {
@@ -34,13 +45,34 @@ export class MeController {
         name: true,
         email: true,
         role: true,
-        tenant: { select: { id: true, name: true, slug: true } },
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            settings: {
+              select: {
+                defaultQuoteValidityUnit: true,
+                defaultQuoteValidityAmount: true,
+              },
+            },
+          },
+        },
       },
     });
     return {
-      ...user,
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
       isAdmin: isAdmin ?? false,
       permissions: Array.from(permissions ?? []),
+      tenant: {
+        id: user.tenant.id,
+        name: user.tenant.name,
+        slug: user.tenant.slug,
+        defaultQuoteValidity: toQuoteValidityDecision(user.tenant.settings),
+      },
     };
   }
 

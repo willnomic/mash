@@ -103,7 +103,12 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
     expect(quote.freightRateId).toBeNull();
     expect(quote.total).toBeNull();
 
-    const closed = await quoteService.close(quote.id);
+    const closed = await quoteService.close(quote.id, {
+      // Unidade "configuração do tenant": este teste é sobre preço/
+      // congelamento, não sobre validade — NEVER preserva o
+      // comportamento de antes (validUntil ficava nulo por omissão).
+      validity: { type: 'NEVER' },
+    });
 
     expect(closed.icmsRateApplied?.toString()).toBe('18');
     expect(closed.ibsRateApplied?.toString()).toBe('0.1');
@@ -149,7 +154,12 @@ describe('Quote · caminho de custo, ponta a ponta (D-041)', () => {
       marginPercentage: '20',
       costLines: [{ costTypeId: freightTypeId, amount: '810' }],
     });
-    await quoteService.close(quote.id);
+    await quoteService.close(quote.id, {
+      // Unidade "configuração do tenant": este teste é sobre preço/
+      // congelamento, não sobre validade — NEVER preserva o
+      // comportamento de antes (validUntil ficava nulo por omissão).
+      validity: { type: 'NEVER' },
+    });
 
     await expect(
       forTenant(tenant.id).quote.update({

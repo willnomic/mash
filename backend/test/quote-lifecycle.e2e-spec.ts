@@ -103,9 +103,32 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
   });
 
   describe('validUntil (D-016, exceção de calendário)', () => {
-    it('close() sem prazo deixa validUntil nulo — cotação nunca expira', async () => {
+    // Unidade "configuração do tenant": close() não aceita mais omissão
+    // — options.validity é obrigatório no tipo (TypeScript barra na
+    // compilação); em runtime, chamar sem decisão nenhuma estoura ao
+    // tentar ler options.validity.type. O caminho HTTP real (schema
+    // Zod em closeQuoteSchema) já devolve 400 com fieldErrors — ver
+    // quote-lifecycle-http.e2e-spec.ts, "sem decisão de validade".
+    it('close() sem decisão nenhuma de validade é recusado (nem prazo, nem "não vence")', async () => {
       const quote = await createOpenQuote();
-      const closed = await quoteService.close(quote.id);
+
+      await expect(
+        quoteService.close(
+          quote.id,
+          undefined as unknown as Parameters<typeof quoteService.close>[1],
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('close() com "não vence" explícito deixa validUntil nulo — cotação nunca expira', async () => {
+      const quote = await createOpenQuote();
+      // Unidade "configuração do tenant": NEVER é decisão EXPLÍCITA,
+      // não mais omissão (close() recusa chamada sem decisão) — o
+      // efeito em validUntil é o mesmo de antes, só a forma de pedir
+      // mudou.
+      const closed = await quoteService.close(quote.id, {
+        validity: { type: 'NEVER' },
+      });
 
       expect(closed.validUntil).toBeNull();
 
@@ -120,7 +143,7 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
       const quote = await createOpenQuote();
       const before = new Date();
       const closed = await quoteService.close(quote.id, {
-        validityTerm: { unit: 'DAYS', amount: 30 },
+        validity: { type: 'TERM', term: { unit: 'DAYS', amount: 30 } },
       });
 
       expect(closed.validUntil).not.toBeNull();
@@ -160,7 +183,7 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
       });
 
       const closed = await quoteService.close(quote.id, {
-        validityTerm: { unit: 'MONTHS', amount: 1 },
+        validity: { type: 'TERM', term: { unit: 'MONTHS', amount: 1 } },
       });
 
       expect(closed.validUntil).not.toBeNull();
@@ -186,14 +209,14 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
 
     it('accept() recusa cotação vencida', async () => {
       const quote = await createOpenQuote();
-      await quoteService.close(quote.id, { validityTerm: { unit: 'DAYS', amount: -1 } });
+      await quoteService.close(quote.id, { validity: { type: 'TERM', term: { unit: 'DAYS', amount: -1 } } });
 
       await expect(quoteService.accept(quote.id, defaultOrderInput())).rejects.toThrow(/vencida/);
     });
 
     it('reject() aceita cotação vencida normalmente — só accept() tem a guarda de vencimento', async () => {
       const quote = await createOpenQuote();
-      await quoteService.close(quote.id, { validityTerm: { unit: 'DAYS', amount: -1 } });
+      await quoteService.close(quote.id, { validity: { type: 'TERM', term: { unit: 'DAYS', amount: -1 } } });
 
       const rejected = await quoteService.reject(quote.id);
       const status = await admin.quoteStatus.findUniqueOrThrow({
@@ -204,7 +227,13 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
 
     it('accept() recusa cotação que já tem desfecho (dupla tentativa)', async () => {
       const quote = await createOpenQuote();
-      await quoteService.close(quote.id);
+      await quoteService.close(quote.id, {
+        // Unidade "configuração do tenant": close() não aceita mais
+        // omissão — NEVER preserva o comportamento de antes
+        // (validUntil ficava nulo por omissão) nos testes que não são
+        // sobre validade em si.
+        validity: { type: 'NEVER' },
+      });
       await quoteService.accept(quote.id, defaultOrderInput());
 
       await expect(quoteService.accept(quote.id, defaultOrderInput())).rejects.toThrow(
@@ -214,7 +243,13 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
 
     it('reject() recusa cotação que já tem desfecho (accept seguido de reject)', async () => {
       const quote = await createOpenQuote();
-      await quoteService.close(quote.id);
+      await quoteService.close(quote.id, {
+        // Unidade "configuração do tenant": close() não aceita mais
+        // omissão — NEVER preserva o comportamento de antes
+        // (validUntil ficava nulo por omissão) nos testes que não são
+        // sobre validade em si.
+        validity: { type: 'NEVER' },
+      });
       await quoteService.accept(quote.id, defaultOrderInput());
 
       await expect(quoteService.reject(quote.id)).rejects.toThrow(
@@ -224,7 +259,13 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
 
     it('reject() recusa cotação que já tem desfecho (dupla tentativa)', async () => {
       const quote = await createOpenQuote();
-      await quoteService.close(quote.id);
+      await quoteService.close(quote.id, {
+        // Unidade "configuração do tenant": close() não aceita mais
+        // omissão — NEVER preserva o comportamento de antes
+        // (validUntil ficava nulo por omissão) nos testes que não são
+        // sobre validade em si.
+        validity: { type: 'NEVER' },
+      });
       await quoteService.reject(quote.id);
 
       await expect(quoteService.reject(quote.id)).rejects.toThrow(
@@ -258,7 +299,13 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
 
     it('admin.quote.update grava um segundo desfecho por cima do primeiro, sem CHECK que impeça', async () => {
       const quote = await createOpenQuote();
-      await quoteService.close(quote.id);
+      await quoteService.close(quote.id, {
+        // Unidade "configuração do tenant": close() não aceita mais
+        // omissão — NEVER preserva o comportamento de antes
+        // (validUntil ficava nulo por omissão) nos testes que não são
+        // sobre validade em si.
+        validity: { type: 'NEVER' },
+      });
       await quoteService.accept(quote.id, defaultOrderInput());
       const rejectedStatus = await admin.quoteStatus.findFirstOrThrow({
         where: { code: 'REJECTED' },
@@ -274,7 +321,7 @@ describe('Quote · ciclo de vida — desfecho, validade e revisão', () => {
 
     it('admin.quote.update aceita cotação vencida, sem CHECK que impeça', async () => {
       const quote = await createOpenQuote();
-      await quoteService.close(quote.id, { validityTerm: { unit: 'DAYS', amount: -1 } });
+      await quoteService.close(quote.id, { validity: { type: 'TERM', term: { unit: 'DAYS', amount: -1 } } });
       const acceptedStatus = await admin.quoteStatus.findFirstOrThrow({
         where: { code: 'ACCEPTED' },
       });

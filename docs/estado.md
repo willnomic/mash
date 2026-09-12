@@ -1209,3 +1209,109 @@ pra isso importar); permissão por filial (fora de escopo, só confirmado que co
 
 **Fora do escopo, não construído (como pedido):** tela de gerenciar grupos e usuários,
 alçada por valor, permissão por filial, dashboard, visibilidade financeira.
+
+## Unidade "configuração do tenant" — prazo padrão de validade da cotação
+
+**Por quê:** `close(quoteId, options?)` aceitava prazo omitido e a cotação nunca
+expirava — o padrão inseguro silencioso da D-046 (quem esquece não recebe erro, recebe
+cotação imortal). A tela já exigia prazo desde a D-051, mas o backend não; qualquer outro
+caminho (script, integração) reabria o buraco.
+
+**Investigado antes de construir (como exigido):**
+- Nenhuma tabela/coluna de configuração de tenant existia — confirmado por `grep` em
+  `schema.prisma`; primeira (D-020 já previa um `SettingsService`, nunca construído).
+- `computeQuoteValidUntil(referenceDate, term)` (`shared/src/quote-validity/`) aceitava
+  só `{unit: 'DAYS'|'MONTHS', amount}`.
+- 11 chamadas a `close()` sem `validityTerm` (produção zero — só testes: 2 em
+  `order-pricing`, 2 em `quote-cost-based`, 5+2 em `quote-lifecycle` [5 sem termo, 2 com
+  termo real], 2 em `quote-accept-creates-order`). Esse número (chamadas que OMITIAM o
+  prazo) não é o mesmo que "total de call sites que precisaram de edição" — ver abaixo.
+- `/configuracoes` (D-055) só tinha um texto fixo "nenhuma tela ainda existe" — nenhuma
+  leitura/escrita de configuração implementada.
+
+**Pronto:**
+- `QuoteValidityTerm` ganhou `'YEARS'` — internamente 1 ano = 12 meses, reaproveitando a
+  MESMA regra de grudar no último dia do mês (`computeQuoteValidUntil`, sem duplicar
+  lógica). Teste explícito: 29/02/2028 + 1 ano gruda em 28/02/2029 (não vira data
+  inexistente); + 4 anos cai em 29/02/2032 (bissexto de novo, o dia existe, não gruda).
+- `QuoteValidityDecision` (`@mash/shared`) — `{type:'TERM', term} | {type:'NEVER'}` —
+  schema único usado tanto no fechamento de UMA cotação quanto na configuração do
+  padrão do tenant, porque é a mesma pergunta nos dois lugares.
+- `TenantSettings`: tabela dedicada (não colunas em `Tenant`, que já carrega config
+  FISCAL — assunto diferente; não key-value genérico, só existe UM campo hoje).
+  `defaultQuoteValidityUnit` nulo = ninguém configurou (linha nem existe — nasce só no
+  primeiro save, mesmo padrão de `CarrierProfile`/D-032, nunca auto-criada com o
+  tenant); `unit='NEVER'` = "não vence" explícito; `DAYS`/`MONTHS`/`YEARS` = prazo. CHECK
+  `TenantSettings_quote_validity_shape` garante as 3 combinações válidas (unit nulo +
+  amount nulo / NEVER + amount nulo / prazo + amount>0), guardado contra NULL (D-043).
+  RLS padrão (D-012). Migração `20260912010000_add_tenant_settings`, aplicada em `mash`
+  e `mash_test`.
+- `close()` (`QuoteService`) — `options.validity` agora OBRIGATÓRIO no tipo (sem `?`);
+  omitir na chamada direta estoura em runtime (`options.validity.type` de `undefined`).
+  No HTTP, `closeQuoteSchema.validity` (Zod, `@mash/shared`) recusa com 400 antes de
+  chegar no serviço.
+- `GET/POST /tenant-settings` atrás de `settings.view`/`settings.change` (D-055) —
+  guarda no backend, testado por HTTP direto (403 pra operador, 200 pra gestor).
+- Prefill do fechamento: `GET /me` (sem exigir permissão) passou a devolver
+  `tenant.defaultQuoteValidity` — decisão deliberada de NÃO gatear atrás de
+  `settings.view`, porque quem fecha cotação (`quote.close`) é o operador do dia a dia,
+  não necessariamente quem administra a configuração. `settings.view`/`settings.change`
+  continuam protegendo só a TELA de gerenciar, não o valor em si (que já não era
+  segredo — mesmo tratamento do nome do tenant, já devolvido em `/me` sem permissão).
+- Lista (D-054): `CLOSED` passou a significar `validUntil >= now` (excluindo nulo, era
+  um `OR` com nulo antes); `CLOSED_NO_EXPIRY` (novo) é `validUntil IS NULL`;
+  `CLOSED_EXPIRED` inalterado. Confirmado que nulo não cai em nenhum dos dois por
+  acidente: os operadores `{gte}`/`{lt}` do Prisma nunca comparam verdadeiro contra
+  NULL em SQL — não foi acidente, foi verificado.
+- Tela de fechar cotação e tela de configuração do tenant reaproveitam o MESMO módulo
+  de schema (`quote-close-form.schema.ts`) — unidade DAYS/MONTHS/YEARS/NEVER, "não
+  vence" como opção do mesmo seletor, nunca um checkbox à parte.
+- Suítes: `shared` **139** (129→139: +10, unidade YEARS + decisão + settings schema),
+  `backend` 27 unit + **400** e2e = **427** (418→427: +9 e2e — 2 filtro
+  `CLOSED_NO_EXPIRY`/visão-padrão em `quote-list-http`, 4 RLS em
+  `tenant-settings-rls`[novo arquivo], 2 permissão em `permission-enforcement-http`, 1
+  "close() sem decisão é recusado" em `quote-lifecycle`), `frontend` 6 (inalterado).
+  Build/lint limpos nos três workspaces.
+- No navegador: operador não vê "Configuração" na sidebar; gestor vê, configura 15
+  dias, salva ("Configuração salva."); nova cotação do gestor chega com "15"/"dias"
+  pré-preenchidos no fechamento, editável (trocado pra 20 e fechado — "Fechada, válida
+  até 02/10/2026", a data certa pros 20 dias). Cotação fechada com "Não vence" mostra
+  "Fechada — sem prazo" no detalhe, aparece no filtro "Sem prazo" da lista e NÃO
+  aparece na visão padrão (só "Fechada", que agora é estritamente "vai vencer").
+- Banco de DESENVOLVIMENTO confirmado intacto depois da suíte e2e e da verificação
+  manual, contado como `mash_owner` (D-053): 6 tenants, 6 usuários (2 novos criados
+  só pra este teste manual — `operador-config@browser.com`/`gestor-config@browser.com`
+  no tenant "Smoke Test"), 38 `Quote`, 1 `TenantSettings`.
+
+**Fiação:** 11 chamadas a `close()` que omitiam prazo precisaram de decisão explícita
+(`{validity:{type:'NEVER'}}` nos testes que não testam validade em si). MAS o número
+real de call sites tocados foi maior: a troca de nome do campo (`validityTerm` →
+`validity`, e a forma que passou a ser `{type,...}` em vez de termo puro) quebrou TODA
+chamada que já passava um termo real também — mais 9 sites em 2 arquivos
+(`quote-lifecycle-http`: 8 corpos HTTP; `quote-list-http`: 1 helper). "11 chamadas sem
+prazo" (da investigação) não é o mesmo número que "total de sites editados" — relatado
+aqui explicitamente pra não confundir os dois.
+
+**Decisões tomadas que não estavam no pedido:**
+- Redefinir a visão PADRÃO (sem filtro) da lista pra excluir "sem prazo" — a D-054 já
+  define o propósito da visão padrão como "o que vai vencer"; uma cotação que nunca
+  vence não tem urgência ali. Comportamento novo em relação à unidade anterior — quem
+  quiser ver "sem prazo" seleciona o filtro explicitamente.
+- `GET /me` ganhou `tenant.defaultQuoteValidity` sem exigir `settings.view` (detalhado
+  acima) — dois caminhos deliberadamente distintos: `/me` pra prefill universal,
+  `/tenant-settings` pra tela de gerenciar.
+- Renomear a descrição do teste `'close() sem prazo deixa validUntil nulo...'` pra
+  `'close() com "não vence" explícito deixa validUntil nulo...'` em
+  `quote-lifecycle.e2e-spec.ts` — só o texto, a asserção (`toBeNull()`) não mudou;
+  "sem prazo" deixou de existir como conceito (agora é decisão explícita).
+- `fieldErrors.validityTerm` → `fieldErrors.validity` em
+  `quote-lifecycle-http.e2e-spec.ts` — mudança mecânica decorrente do próprio rename de
+  campo do contrato (`validityTerm`→`validity`), não uma mudança de regra testada.
+- `quote-close-form.schema.ts` (frontend) virou módulo compartilhado entre a tela de
+  fechar cotação e a tela de configuração do tenant — não um arquivo novo por tela, a
+  pergunta é idêntica nos dois lugares.
+
+**Não verificado:** nenhum item do pedido ficou sem endereçar.
+
+**Fora do escopo, não construído (como pedido):** gerenciar grupos e usuários, qualquer
+configuração além do prazo padrão de validade.

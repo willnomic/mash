@@ -192,7 +192,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
   });
 
   describe('POST /quotes/:id/close', () => {
-    it('sem prazo, 400 com fieldErrors', async () => {
+    it('sem decisão de validade, 400 com fieldErrors — omitir deixou de ser opção (unidade "configuração do tenant")', async () => {
       const id = await createOpenQuoteId();
       const res = await request(app.getHttpServer())
         .post(`/quotes/${id}/close`)
@@ -201,7 +201,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .send({})
         .expect(400);
 
-      expect(res.body.fieldErrors.validityTerm).toBeDefined();
+      expect(res.body.fieldErrors.validity).toBeDefined();
     });
 
     it('com prazo em dias, fecha e calcula validUntil — preço bate com a alíquota real semeada (SP 18%)', async () => {
@@ -210,7 +210,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
 
       expect(res.body.statusCode).toBe('CLOSED');
@@ -234,7 +234,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
 
       const res = await request(app.getHttpServer())
@@ -268,7 +268,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
       await admin.quote.update({
         where: { id },
@@ -290,7 +290,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
 
       const res = await request(app.getHttpServer())
@@ -318,7 +318,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
       await request(app.getHttpServer())
         .post(`/quotes/${id}/accept`)
@@ -347,7 +347,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
 
       const res = await request(app.getHttpServer())
@@ -364,7 +364,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
       await admin.quote.update({
         where: { id },
@@ -385,7 +385,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         .post(`/quotes/${id}/close`)
         .set('Cookie', cookie)
         .set('Origin', 'http://localhost:5173')
-        .send({ validityTerm: { unit: 'DAYS', amount: 3 } })
+        .send({ validity: { type: 'TERM', term: { unit: 'DAYS', amount: 3 } } })
         .expect(200);
       await request(app.getHttpServer())
         .post(`/quotes/${id}/reject`)

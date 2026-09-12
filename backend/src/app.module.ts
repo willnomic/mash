@@ -11,6 +11,7 @@ import { OrderModule } from './order/order.module.js';
 import { PickupOrderModule } from './pickup-order/pickup-order.module.js';
 import { PartyModule } from './party/party.module.js';
 import { BranchModule } from './branch/branch.module.js';
+import { TenantSettingsModule } from './tenant-settings/tenant-settings.module.js';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { BranchModule } from './branch/branch.module.js';
     PickupOrderModule,
     PartyModule,
     BranchModule,
+    TenantSettingsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

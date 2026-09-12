@@ -4,7 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 import {
   computeQuoteValidUntil,
   isQuoteValidityExpired,
-  type QuoteValidityTerm,
+  type QuoteValidityDecision,
   type ListQuotesQuery,
   calculateQuotePricing,
 } from '@mash/shared';
@@ -139,11 +139,18 @@ export class QuoteService {
   // Decimal(14,2) da coluna; o resto do cálculo correu em precisão
   // cheia.
   //
-  // options.validityTerm: opcional — cotação sem prazo combinado fecha
-  // sem validUntil (nunca expira, ver isQuoteValidityExpired em
-  // @mash/shared). Quando informado, validUntil é calculado a partir da
-  // MESMA data de fechamento usada pra ler as alíquotas (closingDate),
-  // nos dois caminhos — inclusive TABELA, que hoje só muda status aqui.
+  // options.validity: OBRIGATÓRIO (unidade "configuração do tenant —
+  // prazo padrão de validade da cotação") — prazo omitido era o padrão
+  // inseguro silencioso que a D-046 já registrava ("cotação sem prazo
+  // combinado nunca expira"); quem esquecia não recebia erro, recebia
+  // cotação imortal. Omitir deixou de ser uma opção: quem chama decide
+  // entre um termo (`{type:'TERM', term}`) ou "não vence" explícito
+  // (`{type:'NEVER'}`) — os dois produzem `validUntil` calculado ou
+  // nulo, exatamente como antes, só que a decisão agora é sempre visível
+  // no ponto de chamada, nunca implícita. validUntil é calculado a
+  // partir da MESMA data de fechamento usada pra ler as alíquotas
+  // (closingDate), nos dois caminhos — inclusive TABELA, que hoje só
+  // muda status aqui.
   //
   // options.quantity: opcional (unidade "caminho CUSTO → Order") —
   // quantidade de viagens, congelada aqui pelo mesmo mecanismo de GRANT
@@ -152,7 +159,7 @@ export class QuoteService {
   // valor pra decidir quantas Trip criar.
   async close(
     quoteId: string,
-    options?: { validityTerm?: QuoteValidityTerm; quantity?: number },
+    options: { validity: QuoteValidityDecision; quantity?: number },
   ) {
     return this.tenantPrisma.transaction(async (tx) => {
       const quote = await tx.quote.findUniqueOrThrow({
@@ -162,9 +169,10 @@ export class QuoteService {
         where: { code: QUOTE_STATUS_CLOSED },
       });
       const closingDate = new Date();
-      const validUntil = options?.validityTerm
-        ? computeQuoteValidUntil(closingDate, options.validityTerm)
-        : null;
+      const validUntil =
+        options.validity.type === 'TERM'
+          ? computeQuoteValidUntil(closingDate, options.validity.term)
+          : null;
 
       if (quote.freightRateId !== null) {
         return tx.quote.update({
@@ -333,16 +341,26 @@ export class QuoteService {
     });
   }
 
-  // Lista de cotações (unidade "lista de cotações") — primeira tela de
-  // chegada. Sem filtro de status explícito, a visão padrão é "Fechada
-  // e válida" ordenada por validUntil mais próximo primeiro: é a
-  // pergunta que a tela existe para responder ("o que está esperando
-  // resposta e vai vencer?"), não a lista inteira por data de criação.
+  // Lista de cotações (unidade "lista de cotações", ampliada pela
+  // "configuração do tenant"). Sem filtro de status explícito, a visão
+  // padrão é "Fechada, com prazo, e ainda válida" ordenada por
+  // validUntil mais próximo primeiro: é a pergunta que a tela existe
+  // para responder ("o que está esperando resposta e VAI VENCER?").
+  // Uma cotação "sem prazo" nunca vai vencer — por isso NÃO entra na
+  // visão padrão (decisão desta unidade): ela não tem urgência nenhuma
+  // pra vigiar, e misturá-la ali diluiria exatamente o que a visão
+  // padrão existe pra destacar. O operador vê "sem prazo" escolhendo o
+  // filtro explicitamente.
   //
-  // CLOSED_EXPIRED é só um valor de FILTRO (nunca statusId gravado,
-  // D-046): traduzido em "statusId=CLOSED AND validUntil < agora".
-  // CLOSED (sem "_EXPIRED") passa a significar só a fatia VÁLIDA aqui —
-  // não o status bruto do banco, que sozinho mistura válida e vencida.
+  // CLOSED_EXPIRED e CLOSED_NO_EXPIRY são valores de FILTRO (nunca
+  // statusId gravado, D-046) — traduzidos em:
+  //   CLOSED           → statusId=CLOSED AND validUntil >= agora (tem prazo, válida)
+  //   CLOSED_EXPIRED   → statusId=CLOSED AND validUntil < agora  (tem prazo, vencida)
+  //   CLOSED_NO_EXPIRY → statusId=CLOSED AND validUntil IS NULL  ("não vence", explícito)
+  // validUntil nulo nunca cai em CLOSED nem em CLOSED_EXPIRED por
+  // acidente: `{gte: referenceDate}`/`{lt: referenceDate}` do Prisma
+  // viram comparação SQL contra NULL, que nunca é verdadeira — só
+  // `{validUntil: null}` (IS NULL) inclui essas linhas.
   //
   // Paginação e filtro/busca correm no banco (não no cliente): a lista
   // cresce pra milhares de linhas por ano.
@@ -369,15 +387,18 @@ export class QuoteService {
       });
       where.statusId = closedStatus.id;
       where.validUntil = { lt: referenceDate };
+    } else if (effectiveStatus === 'CLOSED_NO_EXPIRY') {
+      const closedStatus = await db.quoteStatus.findFirstOrThrow({
+        where: { code: QUOTE_STATUS_CLOSED },
+      });
+      where.statusId = closedStatus.id;
+      where.validUntil = null;
     } else if (effectiveStatus === 'CLOSED') {
       const closedStatus = await db.quoteStatus.findFirstOrThrow({
         where: { code: QUOTE_STATUS_CLOSED },
       });
       where.statusId = closedStatus.id;
-      where.OR = [
-        { validUntil: null },
-        { validUntil: { gte: referenceDate } },
-      ];
+      where.validUntil = { gte: referenceDate };
     } else {
       const status = await db.quoteStatus.findFirstOrThrow({
         where: { code: effectiveStatus },

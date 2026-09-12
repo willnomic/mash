@@ -30,17 +30,21 @@ const STATUS_FILTER_LABEL: Record<QuoteListStatusFilter, string> = {
   OPEN: 'Rascunho',
   CLOSED: 'Fechada',
   CLOSED_EXPIRED: 'Fechada e vencida',
+  CLOSED_NO_EXPIRY: 'Sem prazo',
   ACCEPTED: 'Aceita',
   REJECTED: 'Recusada',
 }
 
 // Mesmo critério de quote-detail.tsx: "vencida" nunca é status próprio,
-// é isExpired calculado no backend a cada consulta (D-046).
+// é isExpired calculado no backend a cada consulta (D-046). Unidade
+// "configuração do tenant": validUntil nulo é "não vence" (decisão
+// explícita) — terceiro caso, nem válida nem vencida.
 function statusLabelFor(item: QuoteListItem): { text: string; tone: StatusTone } {
   if (item.statusCode === 'OPEN') return { text: 'Rascunho', tone: 'neutral' }
   if (item.statusCode === 'ACCEPTED') return { text: 'Aceita', tone: 'positive' }
   if (item.statusCode === 'REJECTED') return { text: 'Recusada', tone: 'negative' }
   if (item.isExpired) return { text: 'Vencida', tone: 'negative' }
+  if (item.validUntil === null) return { text: 'Sem prazo', tone: 'neutral' }
   return { text: 'Fechada', tone: 'neutral' }
 }
 

@@ -139,7 +139,20 @@ describe('GET /quotes · lista de cotações (unidade "lista de cotações")', (
       .post(`/quotes/${id}/close`)
       .set('Cookie', cookie)
       .set('Origin', 'http://localhost:5173')
-      .send({ validityTerm: { unit: 'DAYS', amount: days } })
+      .send({
+        validity: { type: 'TERM', term: { unit: 'DAYS', amount: days } },
+      })
+      .expect(200);
+  }
+
+  // Unidade "configuração do tenant": "não vence" é decisão explícita,
+  // terceiro caso que a lista precisa distinguir de válida/vencida.
+  async function closeQuoteNeverExpires(id: string) {
+    await request(app.getHttpServer())
+      .post(`/quotes/${id}/close`)
+      .set('Cookie', cookie)
+      .set('Origin', 'http://localhost:5173')
+      .send({ validity: { type: 'NEVER' } })
       .expect(200);
   }
 
@@ -275,6 +288,46 @@ describe('GET /quotes · lista de cotações (unidade "lista de cotações")', (
 
       expect(res.body.items.map((q: { id: string }) => q.id)).toEqual([
         expired,
+      ]);
+    });
+
+    // Unidade "configuração do tenant": terceiro caso que a lista
+    // precisa distinguir — "não vence" NUNCA cai junto com válida nem
+    // com vencida.
+    it('CLOSED_NO_EXPIRY devolve só "não vence" — nunca junto com válida nem com vencida', async () => {
+      const valid = await createQuote(partyA.id);
+      await closeQuote(valid);
+      const expired = await createQuote(partyA.id);
+      await closeQuote(expired);
+      await expireQuote(expired);
+      const neverExpires = await createQuote(partyA.id);
+      await closeQuoteNeverExpires(neverExpires);
+
+      const res = await request(app.getHttpServer())
+        .get('/quotes?status=CLOSED_NO_EXPIRY')
+        .set('Cookie', cookie)
+        .expect(200);
+
+      expect(res.body.items.map((q: { id: string }) => q.id)).toEqual([
+        neverExpires,
+      ]);
+      expect(res.body.items[0].validUntil).toBeNull();
+      expect(res.body.items[0].isExpired).toBe(false);
+    });
+
+    it('visão padrão (sem status) exclui "não vence" — ela não tem urgência nenhuma pra vigiar', async () => {
+      const valid = await createQuote(partyA.id);
+      await closeQuote(valid);
+      const neverExpires = await createQuote(partyA.id);
+      await closeQuoteNeverExpires(neverExpires);
+
+      const res = await request(app.getHttpServer())
+        .get('/quotes')
+        .set('Cookie', cookie)
+        .expect(200);
+
+      expect(res.body.items.map((q: { id: string }) => q.id)).toEqual([
+        valid,
       ]);
     });
 

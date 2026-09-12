@@ -147,12 +147,12 @@ export class QuoteController {
     };
   }
 
-  // Fecha com PRAZO OBRIGATÓRIO (unidade "cotação por custo, parte 2"):
-  // QuoteService.close() aceita validityTerm opcional por
-  // compatibilidade (D-046), mas cotação sem prazo nunca expira — o
-  // CONTRATO desta rota (closeQuoteSchema) exige o prazo, é a tela que
-  // sempre manda a data. GUARDA A DATA (validUntil), calculada aqui via
-  // computeQuoteValidUntil dentro do service — nunca o prazo em si.
+  // Fecha com DECISÃO DE PRAZO OBRIGATÓRIA (unidade "configuração do
+  // tenant"): QuoteService.close() não aceita mais omissão — o
+  // CONTRATO desta rota (closeQuoteSchema) exige `validity`, um termo
+  // OU "não vence" explícito. GUARDA A DATA (validUntil), calculada
+  // aqui via computeQuoteValidUntil dentro do service — nunca o prazo
+  // em si (D-046).
   @RequirePermission('quote.close')
   @Post(':id/close')
   @HttpCode(200)
@@ -164,7 +164,7 @@ export class QuoteController {
 
     try {
       await this.quoteService.close(id, {
-        validityTerm: parsed.data.validityTerm,
+        validity: parsed.data.validity,
       });
     } catch (error) {
       this.mapServiceErrorToHttp(error);

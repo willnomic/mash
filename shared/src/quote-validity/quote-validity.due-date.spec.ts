@@ -67,4 +67,44 @@ describe('computeQuoteValidUntil', () => {
 
     expect(result.toISOString().slice(0, 10)).toBe('2026-09-10');
   });
+
+  // Unidade "configuração do tenant — prazo padrão de validade da
+  // cotação": "1 ano" é 12 meses, mesma regra de grudar no último dia.
+  it('soma um ano quando o dia existe no ano de destino', () => {
+    const result = computeQuoteValidUntil(new Date('2026-06-15T00:00:00Z'), {
+      unit: 'YEARS',
+      amount: 1,
+    });
+
+    expect(result.toISOString().slice(0, 10)).toBe('2027-06-15');
+  });
+
+  it('29/02 + 1 ano NÃO vira data inexistente — gruda em 28/02 do ano seguinte (não bissexto)', () => {
+    const result = computeQuoteValidUntil(new Date('2028-02-29T00:00:00Z'), {
+      unit: 'YEARS',
+      amount: 1,
+    });
+
+    // 2029 não é bissexto — fevereiro tem 28 dias. Mesma regra de
+    // 31/01 + 1 mês virar 28/02, aplicada a ano.
+    expect(result.toISOString().slice(0, 10)).toBe('2029-02-28');
+  });
+
+  it('29/02 + 4 anos cai num bissexto de novo — o dia 29 existe, não gruda', () => {
+    const result = computeQuoteValidUntil(new Date('2028-02-29T00:00:00Z'), {
+      unit: 'YEARS',
+      amount: 4,
+    });
+
+    expect(result.toISOString().slice(0, 10)).toBe('2032-02-29');
+  });
+
+  it('soma vários anos cruzando o limite do mês/ano', () => {
+    const result = computeQuoteValidUntil(new Date('2026-11-30T00:00:00Z'), {
+      unit: 'YEARS',
+      amount: 2,
+    });
+
+    expect(result.toISOString().slice(0, 10)).toBe('2028-11-30');
+  });
 });

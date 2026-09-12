@@ -99,7 +99,13 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
       freightRateId: freightRate.id,
       total: '600',
     });
-    await quoteService.close(quote.id);
+    await quoteService.close(quote.id, {
+      // Unidade "configuração do tenant": close() não aceita mais
+      // omissão — este teste é sobre preço/caminho TABELA, não sobre
+      // validade, então NEVER preserva o comportamento de antes
+      // (validUntil ficava nulo por omissão).
+      validity: { type: 'NEVER' },
+    });
 
     const order = await orderService.createFromQuote({
       quoteId: quote.id,
@@ -231,7 +237,13 @@ describe('Quote/Order · congelamento de valor e imutabilidade (D-014, D-018)', 
     ).rejects.toThrow();
 
     // status muda sem erro — é a única coluna de valor liberada.
-    const closed = await quoteService.close(quote.id);
+    const closed = await quoteService.close(quote.id, {
+      // Unidade "configuração do tenant": close() não aceita mais
+      // omissão — este teste é sobre preço/caminho TABELA, não sobre
+      // validade, então NEVER preserva o comportamento de antes
+      // (validUntil ficava nulo por omissão).
+      validity: { type: 'NEVER' },
+    });
     expect(closed.statusId).not.toBe(quote.statusId);
   });
 });

@@ -7,3 +7,4 @@ export * from './quote/index.js';
 export * from './party/index.js';
 export * from './branch/index.js';
 export * from './permission/index.js';
+export * from './tenant-settings/index.js';

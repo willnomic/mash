@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { AcceptQuoteInput } from '@mash/shared'
+import type { AcceptQuoteInput, QuoteValidityDecision } from '@mash/shared'
 import { api } from '@/lib/api-client'
 
 // Espelha o corpo que QuoteController.findOne()/close()/accept()/
@@ -34,11 +34,6 @@ export interface QuoteDetail {
   } | null
 }
 
-export interface ValidityTermInput {
-  unit: 'DAYS' | 'MONTHS'
-  amount: number
-}
-
 export function useQuote(id: string) {
   return useQuery({
     queryKey: ['quote', id],
@@ -54,8 +49,8 @@ export function useQuote(id: string) {
 export function useCloseQuote(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (validityTerm: ValidityTermInput) =>
-      api.post<QuoteDetail>(`/quotes/${id}/close`, { validityTerm }),
+    mutationFn: (validity: QuoteValidityDecision) =>
+      api.post<QuoteDetail>(`/quotes/${id}/close`, { validity }),
     onSuccess: (data) => {
       queryClient.setQueryData(['quote', id], data)
     },

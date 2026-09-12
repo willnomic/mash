@@ -3,7 +3,7 @@ import { getRouteApi } from '@tanstack/react-router'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { acceptQuoteSchema } from '@mash/shared'
+import { acceptQuoteSchema, type QuoteValidityDecision } from '@mash/shared'
 
 // Entrada (defaultValues, antes de submeter) e saída (o que
 // handleSubmit devolve, já com customerReference normalizado) diferem
@@ -15,7 +15,9 @@ type AcceptFormValues = z.input<typeof acceptQuoteSchema>
 type AcceptFormOutput = z.output<typeof acceptQuoteSchema>
 import {
   quoteCloseFormSchema,
-  type QuoteCloseFormOutput,
+  decisionToCloseFormValues,
+  QUOTE_CLOSE_FORM_UNITS,
+  QUOTE_CLOSE_FORM_UNIT_LABEL,
   type QuoteCloseFormValues,
 } from '@/lib/quote-close-form.schema'
 import { formatDecimalBRL, formatPercentBRL } from '@/lib/br-number'
@@ -27,10 +29,9 @@ import {
   useCloseQuote,
   useAcceptQuote,
   useRejectQuote,
-  type ValidityTermInput,
 } from '@/hooks/use-quote-detail'
 import { useParties } from '@/hooks/use-parties'
-import { usePermissions } from '@/hooks/use-session'
+import { usePermissions, useSession } from '@/hooks/use-session'
 import { useBranches } from '@/hooks/use-branches'
 import type { CreatedParty } from '@/hooks/use-create-party'
 import type { CreatedBranch } from '@/hooks/use-create-branch'
@@ -57,6 +58,11 @@ const PARTY_ROLE_LABEL: Record<PartyRoleField, string> = {
 // Cinco estados (D-046/D-047/D-050), dois gravados e um derivado —
 // "vencida" nunca é lido do banco, é isExpired calculado no backend a
 // cada GET (isQuoteValidityExpired), nunca um status próprio.
+//
+// Unidade "configuração do tenant": validUntil nulo é "não vence"
+// (decisão explícita, D-046/isQuoteValidityExpired já trata nulo como
+// nunca vencido) — mostrado como "sem prazo", nem finge validade nem
+// aparece como vencida.
 function statusLabel(statusCode: string, isExpired: boolean, validUntil: string | null) {
   if (statusCode === 'OPEN') return { text: 'Rascunho', tone: 'neutral' as const }
   if (statusCode === 'ACCEPTED') return { text: 'Aceita', tone: 'positive' as const }
@@ -64,12 +70,15 @@ function statusLabel(statusCode: string, isExpired: boolean, validUntil: string 
   // CLOSED
   if (isExpired) {
     return {
-      text: `Fechada e vencida${validUntil ? ` (venceu em ${formatDate(validUntil)})` : ''}`,
+      text: `Fechada e vencida (venceu em ${formatDate(validUntil)})`,
       tone: 'negative' as const,
     }
   }
+  if (validUntil === null) {
+    return { text: 'Fechada — sem prazo', tone: 'neutral' as const }
+  }
   return {
-    text: `Fechada${validUntil ? `, válida até ${formatDate(validUntil)}` : ''}`,
+    text: `Fechada, válida até ${formatDate(validUntil)}`,
     tone: 'neutral' as const,
   }
 }
@@ -82,6 +91,7 @@ const routeApi = getRouteApi('/app/cotacoes/$id')
 export function QuoteDetailPage() {
   const { id: quoteId } = routeApi.useParams()
   const quote = useQuote(quoteId)
+  const session = useSession()
   const closeMutation = useCloseQuote(quoteId)
   const acceptMutation = useAcceptQuote(quoteId)
   const rejectMutation = useRejectQuote(quoteId)
@@ -89,7 +99,7 @@ export function QuoteDetailPage() {
   const branches = useBranches()
   const { hasPermission } = usePermissions()
 
-  const [pendingClose, setPendingClose] = useState<ValidityTermInput | null>(
+  const [pendingClose, setPendingClose] = useState<QuoteValidityDecision | null>(
     null,
   )
   const [pendingAccept, setPendingAccept] = useState<AcceptFormOutput | null>(
@@ -165,10 +175,11 @@ export function QuoteDetailPage() {
     focusSoon(branchRef)
   }
 
-  const closeForm = useForm<QuoteCloseFormValues, unknown, QuoteCloseFormOutput>({
+  const closeForm = useForm<QuoteCloseFormValues, unknown, QuoteValidityDecision>({
     resolver: zodResolver(quoteCloseFormSchema),
     defaultValues: { unit: 'DAYS', amount: '' },
   })
+  const closeUnit = closeForm.watch('unit')
   const acceptForm = useForm<AcceptFormValues, unknown, AcceptFormOutput>({
     resolver: zodResolver(acceptQuoteSchema),
     defaultValues: {
@@ -190,6 +201,24 @@ export function QuoteDetailPage() {
       branchRef.current?.focus()
     }
   }, [quote.data?.statusCode, quote.data?.isExpired])
+
+  // Unidade "configuração do tenant": o prazo padrão do tenant
+  // pré-enche o formulário de fechar — só até o operador mexer (não
+  // pisa por cima do que ele já digitou se a sessão terminar de
+  // carregar depois). NULO (tenant não configurou nada) mantém o
+  // default de sempre: DAYS em branco, operador decide.
+  useEffect(() => {
+    if (
+      quote.data?.statusCode === 'OPEN' &&
+      session.data &&
+      !closeForm.formState.isDirty
+    ) {
+      closeForm.reset(
+        decisionToCloseFormValues(session.data.tenant.defaultQuoteValidity),
+      )
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quote.data?.statusCode, session.data])
 
   if (quote.isLoading) {
     return (
@@ -371,24 +400,29 @@ export function QuoteDetailPage() {
             <div className="flex flex-col gap-2 border-t border-border pt-3">
               <span className="text-sm font-medium">Fechar cotação</span>
               <div className="flex gap-2">
-                <Input
-                  {...closeForm.register('amount')}
-                  ref={(el) => {
-                    closeForm.register('amount').ref(el)
-                    amountRef.current = el
-                  }}
-                  inputMode="numeric"
-                  placeholder="Prazo"
-                  className="w-20 text-right tabular-nums"
-                  aria-invalid={Boolean(closeForm.formState.errors.amount)}
-                />
+                {closeUnit !== 'NEVER' && (
+                  <Input
+                    {...closeForm.register('amount')}
+                    ref={(el) => {
+                      closeForm.register('amount').ref(el)
+                      amountRef.current = el
+                    }}
+                    inputMode="numeric"
+                    placeholder="Prazo"
+                    className="w-20 text-right tabular-nums"
+                    aria-invalid={Boolean(closeForm.formState.errors.amount)}
+                  />
+                )}
                 <select
                   {...closeForm.register('unit')}
                   className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-sm outline-none"
                   style={{ fontSize: 'var(--density-form-font-size)' }}
                 >
-                  <option value="DAYS">dias</option>
-                  <option value="MONTHS">meses</option>
+                  {QUOTE_CLOSE_FORM_UNITS.map((code) => (
+                    <option key={code} value={code}>
+                      {QUOTE_CLOSE_FORM_UNIT_LABEL[code]}
+                    </option>
+                  ))}
                 </select>
               </div>
               {closeForm.formState.errors.amount && (
