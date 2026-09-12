@@ -89,6 +89,9 @@ describe('Cotação por custo · rotas HTTP (unidade "primeira tela de negócio"
         name: 'Operador A',
         role: 'OPERATOR',
         active: true,
+        // isAdmin (unidade "papéis e permissões") — este teste não é
+        // sobre permissão, admin preserva o comportamento de antes.
+        isAdmin: true,
       },
     });
 

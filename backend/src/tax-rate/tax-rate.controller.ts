@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { BRAZILIAN_STATE_CODES } from '@mash/shared';
+import { RequirePermission } from '../auth/permission.decorator.js';
 import { TaxRateService } from './tax-rate.service.js';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 
@@ -35,6 +36,9 @@ export class TaxRateController {
     private readonly tenantPrisma: TenantPrisma,
   ) {}
 
+  // Auxílio do fluxo de MONTAR cotação (unidade "papéis e permissões")
+  // — preview ao vivo, mesma permissão de quote.create.
+  @RequirePermission('quote.create')
   @Get('quote-preview')
   async quotePreview(@Query() query: unknown) {
     const parsed = quotePreviewQuerySchema.safeParse(query);

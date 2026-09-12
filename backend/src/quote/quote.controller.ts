@@ -19,6 +19,7 @@ import {
   listQuotesQuerySchema,
   isQuoteValidityExpired,
 } from '@mash/shared';
+import { RequirePermission } from '../auth/permission.decorator.js';
 import { QuoteService } from './quote.service.js';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 
@@ -39,6 +40,7 @@ export class QuoteController {
   // então "o backend nunca confia no valor calculado pelo cliente"
   // (D-048) vale de graça aqui — não tem valor de cliente pra confiar
   // ou desconfiar.
+  @RequirePermission('quote.create')
   @Post('cost-based')
   async createCostBased(@Body() body: unknown) {
     const parsed = createCostBasedQuoteSchema.safeParse(body);
@@ -56,6 +58,7 @@ export class QuoteController {
   // (busca de entidade, D-048/D-049): a tela manda page/pageSize
   // maiores, o Ctrl+K manda um "q" e um pageSize pequeno — nenhum
   // endpoint separado.
+  @RequirePermission('quote.view')
   @Get()
   async list(@Query() query: unknown) {
     const parsed = listQuotesQuerySchema.safeParse(query);
@@ -82,6 +85,7 @@ export class QuoteController {
   // inventar do que arriscar um número que parece preciso e não é). A
   // tela mostra alíquota aplicada (%) e total (R$), nunca um R$ de
   // imposto que não foi persistido.
+  @RequirePermission('quote.view')
   @Get(':id')
   async findOne(@Param('id') id: string) {
     let quote;
@@ -149,6 +153,7 @@ export class QuoteController {
   // CONTRATO desta rota (closeQuoteSchema) exige o prazo, é a tela que
   // sempre manda a data. GUARDA A DATA (validUntil), calculada aqui via
   // computeQuoteValidUntil dentro do service — nunca o prazo em si.
+  @RequirePermission('quote.close')
   @Post(':id/close')
   @HttpCode(200)
   async close(@Param('id') id: string, @Body() body: unknown) {
@@ -173,6 +178,7 @@ export class QuoteController {
   // "já tem desfecho" e "vencida" — aqui a rota decide o código HTTP e a
   // mensagem certos pra cada caso, sem mudar o service (D-050: exception
   // filter global mudaria o formato de erro de 343 testes).
+  @RequirePermission('quote.accept')
   @Post(':id/accept')
   @HttpCode(200)
   async accept(@Param('id') id: string, @Body() body: unknown) {
@@ -212,6 +218,7 @@ export class QuoteController {
   // Recusar reaproveita QuoteStatus REJECTED (D-046). Cotação vencida
   // pode ser recusada normalmente — só accept() tem a guarda de
   // vencimento.
+  @RequirePermission('quote.reject')
   @Post(':id/reject')
   @HttpCode(200)
   async reject(@Param('id') id: string) {

@@ -102,6 +102,7 @@ describe('Cotação por custo · rotas HTTP, parte 2 (fechar/aceitar/recusar)', 
         name: 'Operador A',
         role: 'OPERATOR',
         active: true,
+        isAdmin: true,
       },
     });
 

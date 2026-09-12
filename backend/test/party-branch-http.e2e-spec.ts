@@ -69,6 +69,7 @@ describe('Criar cliente sem sair do fluxo · rotas HTTP (Party/Branch)', () => {
         name: 'Operador A',
         role: 'OPERATOR',
         active: true,
+        isAdmin: true,
       },
     });
 
@@ -209,6 +210,7 @@ describe('Criar cliente sem sair do fluxo · rotas HTTP (Party/Branch)', () => {
           name: 'Operador B',
           role: 'OPERATOR',
           active: true,
+          isAdmin: true,
         },
       });
       const loginB = await request(app.getHttpServer())

@@ -24,6 +24,7 @@ import { useQuoteCostTypes } from '@/hooks/use-quote-cost-types'
 import { useTaxRatePreview } from '@/hooks/use-tax-rate-preview'
 import { useCreateCostBasedQuote } from '@/hooks/use-create-cost-based-quote'
 import { useParties } from '@/hooks/use-parties'
+import { usePermissions } from '@/hooks/use-session'
 import type { CreatedParty } from '@/hooks/use-create-party'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -57,6 +58,7 @@ export function QuoteCostBasedPage() {
   const costTypes = useQuoteCostTypes()
   const createQuote = useCreateCostBasedQuote()
   const parties = useParties()
+  const { hasPermission } = usePermissions()
 
   const {
     register,
@@ -289,7 +291,11 @@ export function QuoteCostBasedPage() {
               isLoading={parties.isLoading}
               createLabel="cliente"
               ariaInvalid={Boolean(errors.partyId)}
-              onRequestCreate={(query) => setCreatePartyRequest({ query })}
+              onRequestCreate={
+                hasPermission('registration.create')
+                  ? (query) => setCreatePartyRequest({ query })
+                  : undefined
+              }
             />
             {errors.partyId && (
               <p className="text-xs text-destructive">

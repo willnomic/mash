@@ -63,6 +63,11 @@ export class TenantGuard implements CanActivate {
     this.cls.set('tenantId', session.tenantId);
     this.cls.set('userId', session.userId);
     this.cls.set('role', session.role);
+    // Lido por PermissionGuard, o próximo guard da cadeia (unidade
+    // "papéis e permissões") — nunca pelo próprio TenantGuard, que só
+    // resolve QUEM está logado, nunca O QUE pode fazer (D-009).
+    this.cls.set('isAdmin', session.isAdmin);
+    this.cls.set('permissions', session.permissions);
 
     return true;
   }

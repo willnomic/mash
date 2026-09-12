@@ -107,6 +107,7 @@ describe('GET /quotes · lista de cotações (unidade "lista de cotações")', (
         name: 'Operador A',
         role: 'OPERATOR',
         active: true,
+        isAdmin: true,
       },
     });
 

@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Get, Post } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 import { createBranchSchema } from '@mash/shared';
+import { RequirePermission } from '../auth/permission.decorator.js';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 
 // Leitura simples pra popular o seletor de filial no aceite (D-047) —
@@ -14,6 +15,9 @@ import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 export class BranchController {
   constructor(private readonly tenantPrisma: TenantPrisma) {}
 
+  // "partes e filiais (ver, criar)" é um domínio só (unidade "papéis e
+  // permissões", item 2) — mesma permissão de PartyController.
+  @RequirePermission('registration.view')
   @Get()
   list() {
     return this.tenantPrisma.db.branch.findMany({
@@ -22,6 +26,7 @@ export class BranchController {
     });
   }
 
+  @RequirePermission('registration.create')
   @Post()
   async create(@Body() body: unknown) {
     const parsed = createBranchSchema.safeParse(body);

@@ -23,18 +23,18 @@ enum IncomeTaxRegime {
 // id é o tenant. A política de RLS compara "id" com o tenant da sessão, para
 // que uma requisição só enxergue a própria linha desta tabela.
 model Tenant {
-  id                   String                @id @db.Uuid
-  name                 String
+  id                       String                @id @db.Uuid
+  name                     String
   // Identifica o tenant no login, antes de existir tenant na sessão
   // (D-029) — não é a chave primária (D-015: UUID nunca aparece pro
   // operador). Formato (minúsculo, sem espaço) é reforçado por CHECK no
   // banco, não só validado na aplicação.
-  slug                 String                @unique @db.VarChar(63)
+  slug                     String                @unique @db.VarChar(63)
   // Regime tributário (D-043) — todos nullable: nenhum tenant hoje tem
   // isso configurado (não existe tela/fluxo de onboarding fiscal ainda),
   // e "não configurado" é um estado honesto, diferente de assumir um
   // regime por default.
-  incomeTaxRegime      IncomeTaxRegime?
+  incomeTaxRegime          IncomeTaxRegime?
   // Só tem sentido quando incomeTaxRegime = SIMPLES_NACIONAL — indicador
   // de contribuinte do Simples, campo à parte do CST (consulta
   // tributária: "CST 90 para Simples Nacional, COM indicador de
@@ -51,43 +51,45 @@ model Tenant {
   // incompleto quando os outros regimes de apuração aparecerem — abrir
   // enum depois é migração simples, é o "assento reservado" que a
   // consulta pediu, não o fluxo.
-  ibsCbsApurationRegime String?
-  createdAt            DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime              @updatedAt @db.Timestamptz(3)
-  users                User[]
-  branches             Branch[]
-  parties              Party[]
-  addresses            Address[]
-  drivers              Driver[]
-  vehicles             Vehicle[]
-  lanes                Lane[]
-  freightRates         FreightRate[]
-  quoteStatuses        QuoteStatus[]
-  quotes               Quote[]
-  quoteCostTypes       QuoteCostType[]
-  quoteCostLines       QuoteCostLine[]
-  orderStatuses        OrderStatus[]
-  orders               Order[]
-  documentCounters     DocumentCounter[]
-  tripStatuses         TripStatus[]
-  trips                Trip[]
-  riskClearances       RiskClearance[]
-  deductionReasons     DeductionReason[]
-  carrierHires         CarrierHire[]
-  carrierPayments      CarrierPayment[]
-  tollVoucherPurchases TollVoucherPurchase[]
-  occurrenceTypes      OccurrenceType[]
-  occurrences          Occurrence[]
-  carrierProfiles      CarrierProfile[]
-  dayPeriods           DayPeriod[]
-  pickupOrders         PickupOrder[]
-  pickupOrderItems     PickupOrderItem[]
-  invoices             Invoice[]
-  boletos              Boleto[]
-  receivableEvents     ReceivableEvent[]
-  attachments          Attachment[]
-  ibsCbsTaxSituations  IbsCbsTaxSituation[]
-  sessions             Session[]
+  ibsCbsApurationRegime    String?
+  createdAt                DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime              @updatedAt @db.Timestamptz(3)
+  users                    User[]
+  branches                 Branch[]
+  parties                  Party[]
+  addresses                Address[]
+  drivers                  Driver[]
+  vehicles                 Vehicle[]
+  lanes                    Lane[]
+  freightRates             FreightRate[]
+  quoteStatuses            QuoteStatus[]
+  quotes                   Quote[]
+  quoteCostTypes           QuoteCostType[]
+  quoteCostLines           QuoteCostLine[]
+  orderStatuses            OrderStatus[]
+  orders                   Order[]
+  documentCounters         DocumentCounter[]
+  tripStatuses             TripStatus[]
+  trips                    Trip[]
+  riskClearances           RiskClearance[]
+  deductionReasons         DeductionReason[]
+  carrierHires             CarrierHire[]
+  carrierPayments          CarrierPayment[]
+  tollVoucherPurchases     TollVoucherPurchase[]
+  occurrenceTypes          OccurrenceType[]
+  occurrences              Occurrence[]
+  carrierProfiles          CarrierProfile[]
+  dayPeriods               DayPeriod[]
+  pickupOrders             PickupOrder[]
+  pickupOrderItems         PickupOrderItem[]
+  invoices                 Invoice[]
+  boletos                  Boleto[]
+  receivableEvents         ReceivableEvent[]
+  attachments              Attachment[]
+  ibsCbsTaxSituations      IbsCbsTaxSituation[]
+  sessions                 Session[]
+  groups                   Group[]
+  groupPermissions         GroupPermission[]
 }
 
 // Filial é CNPJ, não organograma (D-011). Cadastro (Party, Driver,
@@ -116,6 +118,16 @@ model Branch {
 // define quais dados existem (D-012). Nunca misturar as duas numa consulta.
 // Valores em inglês (D-007): são cargos genéricos, sem significado legal ou
 // setorial brasileiro, então não são exceção à regra do inglês.
+//
+// DEPRECIADO NA PRÁTICA (unidade "papéis e permissões"): esta coluna nunca
+// foi lida por nenhum guard nem exibida em tela nenhuma — verificado antes
+// de modelar (`grep` em src/ só acha atribuição, nunca leitura pra decisão).
+// A pesquisa de mercado que motivou esta unidade (ESL Cloud, Senior) mostra
+// que papel fixo no código é o padrão que essas plataformas abandonaram —
+// substituído por Group/Permission abaixo. Não removida aqui: apagar a
+// coluna e o enum tocaria toda fixture de teste que cria User (~8 arquivos)
+// por um campo que hoje não faz nada, troca não pedida nesta unidade
+// ("não estenda o escopo") — fica como achado, não como decisão de remoção.
 enum UserRole {
   OPERATOR
   MANAGER
@@ -123,24 +135,117 @@ enum UserRole {
   ADMIN
 }
 
+// Permissão é FUNÇÃO, não papel fixo (unidade "papéis e permissões") —
+// tabela de domínio (D-020), NÃO enum: corresponde 1:1 a uma capacidade que
+// existe no CÓDIGO (`@RequirePermission(code)` num controller), mas quem
+// decide COMO agrupá-las em papéis é o Group abaixo, que o tenant edita,
+// exclui ou duplica. Um tenant não tem como inventar uma permissão nova —
+// só combinar as que existem — por isso, diferente de QuoteCostType/
+// QuoteStatus, não tem `tenantId`: é catálogo GLOBAL, mesmo tratamento de
+// TaxRate (D-041) — valor de sistema, não configuração de tenant. RLS
+// obrigatório mesmo assim (guarda de schema, D-012), `USING (true)`, e
+// UPDATE/INSERT/DELETE revogados de mash_app: só migração adiciona
+// permissão nova, nunca a aplicação (mesmo critério de TaxRate).
+//
+// `module` só agrupa pra organizar a tela de gerenciar grupos (fora desta
+// unidade) — string livre, não enum: mais módulo é INSERT futuro, não
+// deploy, e um enum aqui teria o mesmo custo de mudança que a tabela existe
+// pra evitar.
+model Permission {
+  id               String            @id @db.Uuid
+  code             String            @unique
+  module           String
+  name             String
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
+  groupPermissions GroupPermission[]
+}
+
+// Grupo PERTENCE ao tenant (`tenantId NOT NULL`) — decisão desta unidade,
+// e a única possível: QuoteStatus/DayPeriod usam `tenantId` NULO como
+// "padrão do sistema compartilhado" porque editar aquelas linhas não é uma
+// operação que o tenant faz (são lidas, não alteradas por ele). Group é o
+// oposto — o pedido é explícito: "cada transportadora altera, exclui ou
+// duplica" — se "Gestor"/"Operador" fossem duas linhas globais
+// (tenantId nulo) como QuoteStatus, a Transportadora A editando "Operador"
+// mudaria o grupo de TODA transportadora ao mesmo tempo. Em vez disso,
+// "Gestor"/"Operador" nascem DENTRO de cada tenant — mesmo mecanismo que já
+// cria a filial padrão junto do tenant (D-030, `TenantsService.create()`,
+// porta única de criação) — semente também aplicada, uma vez, aos tenants
+// que já existiam antes desta migração (ver final do arquivo .sql).
+//
+// ASSENTO PRA FILIAL (D-011/D-035, "a Senior escopa permissão por
+// filial"): não construído agora, mas comporta depois SEM remodelar
+// Group/Permission — bastaria um `branchId` anulável em User (ou em Group),
+// ortogonal ao que já existe aqui, do mesmo jeito que tenantId (RLS, "quais
+// dados existem") já é ortogonal a Group/Permission ("o que se pode
+// fazer", D-009). Nenhuma FK nova entre Group e Branch seria necessária.
+model Group {
+  id               String            @id @db.Uuid
+  tenantId         String            @db.Uuid
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  name             String
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
+  groupPermissions GroupPermission[]
+  users            User[]
+
+  @@index([tenantId])
+}
+
+// Join table Group↔Permission — carrega `tenantId` PRÓPRIO (redundante com
+// Group.tenantId), mesmo critério de toda tabela filha tenant-scoped nesta
+// base (QuoteCostLine, OrderParties): RLS nunca é inferido por join, cada
+// tabela garante a própria linha (D-012).
+model GroupPermission {
+  id           String     @id @db.Uuid
+  tenantId     String     @db.Uuid
+  tenant       Tenant     @relation(fields: [tenantId], references: [id])
+  groupId      String     @db.Uuid
+  group        Group      @relation(fields: [groupId], references: [id])
+  permissionId String     @db.Uuid
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@unique([groupId, permissionId])
+  @@index([tenantId])
+}
+
 model User {
-  id           String   @id @db.Uuid
-  tenantId     String   @db.Uuid
-  tenant       Tenant   @relation(fields: [tenantId], references: [id])
-  email        String
-  passwordHash String
-  name         String
-  role         UserRole
+  id                  String       @id @db.Uuid
+  tenantId            String       @db.Uuid
+  tenant              Tenant       @relation(fields: [tenantId], references: [id])
+  email               String
+  passwordHash        String
+  name                String
+  role                UserRole
+  // Grupo define as permissões efetivas (unidade "papéis e permissões") —
+  // anulável: um usuário sem grupo e sem isAdmin tem ZERO permissões (é
+  // estado válido, não erro — nada nesta unidade obriga atribuir grupo na
+  // criação, isso é da tela de gerenciar usuários, fora de escopo).
+  // ON DELETE SET NULL: apagar um Group (fora de escopo construir isso
+  // agora) tira a permissão de quem estava nele, não impede a exclusão nem
+  // apaga o usuário.
+  groupId             String?      @db.Uuid
+  group               Group?       @relation(fields: [groupId], references: [id])
+  // Ignora Group inteiramente e tem tudo — "evita a transportadora se
+  // trancar pra fora" (o pedido). DEFAULT false: só quem existia ANTES
+  // desta migração vira admin automaticamente (backfill no .sql, pra não
+  // reduzir o acesso de ninguém que já tinha o sistema inteiro liberado);
+  // usuário novo nasce sem grupo e sem admin, estado "sem acesso" explícito
+  // em vez de herdar um privilégio que ninguém pediu.
+  isAdmin             Boolean      @default(false)
   // Cadastro nunca tem hard delete (D-017): inativar é estado, não remoção.
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+  active              Boolean      @default(true)
+  createdAt           DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime     @updatedAt @db.Timestamptz(3)
   // Anexos que este usuário enviou (D-042) — "quem enviou" do metadado.
   uploadedAttachments Attachment[]
-  sessions     Session[]
+  sessions            Session[]
 
   @@unique([tenantId, email])
   @@index([tenantId, active])
+  @@index([tenantId, groupId])
 }
 
 // Sessão opaca (D-048, unidade "a casca do frontend" — substitui o JWT
@@ -498,9 +603,9 @@ model QuoteStatus {
 // DELETE revogado (D-017: é histórico — "perdida" é estado, não
 // remoção).
 model Quote {
-  id                   String        @id @db.Uuid
-  tenantId             String        @db.Uuid
-  tenant               Tenant        @relation(fields: [tenantId], references: [id])
+  id                   String          @id @db.Uuid
+  tenantId             String          @db.Uuid
+  tenant               Tenant          @relation(fields: [tenantId], references: [id])
   // Quem PEDIU a cotação (unidade "vincular cliente à Quote") — é com
   // essa Party que o operador troca e-mail; NÃO é remetente/
   // destinatário/tomador fiscal do Order (D-047: esses só se conhecem
@@ -519,40 +624,40 @@ model Quote {
   // coluna: nunca fica reescrevível por mash_app (mesmo regime de
   // icmsUf/marginPercentage, que também não têm GRANT) — o cliente não
   // muda o preço, não faz parte do congelamento de close().
-  partyId              String        @db.Uuid
-  party                Party         @relation(fields: [partyId], references: [id])
+  partyId              String          @db.Uuid
+  party                Party           @relation(fields: [partyId], references: [id])
   // Referência de auditoria à linha de origem (D-014) — não redundante
   // com party/lane: ambos são derived via freightRate. Nulo no caminho
   // por custo (D-041) — não existe FreightRate nesse caminho.
-  freightRateId        String?       @db.Uuid
-  freightRate          FreightRate?  @relation(fields: [freightRateId], references: [id])
-  statusId             String        @db.Uuid
-  status               QuoteStatus   @relation(fields: [statusId], references: [id])
+  freightRateId        String?         @db.Uuid
+  freightRate          FreightRate?    @relation(fields: [freightRateId], references: [id])
+  statusId             String          @db.Uuid
+  status               QuoteStatus     @relation(fields: [statusId], references: [id])
   // Congelado no fechamento (caminho TABELA) — cópia, não consulta.
   // Escalas de D-013. Nulo no caminho CUSTO.
-  rate                 Decimal?      @db.Decimal(18, 6)
-  minimumFreight       Decimal?      @db.Decimal(14, 2)
-  additionalPercentage Decimal?      @db.Decimal(7, 4)
+  rate                 Decimal?        @db.Decimal(18, 6)
+  minimumFreight       Decimal?        @db.Decimal(14, 2)
+  additionalPercentage Decimal?        @db.Decimal(7, 4)
   // Margem pedida pelo operador (D-041) — ENTRADA do cálculo, não saída.
   // Só existe no caminho CUSTO, informada na criação, nunca muda depois
   // (recalcular com margem diferente é cotação nova, não edição).
-  marginPercentage     Decimal?      @db.Decimal(7, 4)
+  marginPercentage     Decimal?        @db.Decimal(7, 4)
   // UF de referência do ICMS (D-041) — só existe no caminho CUSTO. Sem
   // Party/Lane nesta tabela pra derivar UF de outro jeito; obrigatório
   // pra escolher a linha certa de TaxRate.
-  icmsUf               String?       @db.Char(2)
+  icmsUf               String?         @db.Char(2)
   // Alíquotas efetivamente usadas no fechamento (D-041/D-014) — snapshot,
   // não referência: se a lei mudar depois, uma cotação já fechada não
   // muda de valor. Nulas até o fechamento no caminho CUSTO; nunca
   // preenchidas no caminho TABELA (ele não usa TaxRate).
-  icmsRateApplied      Decimal?      @db.Decimal(7, 4)
-  ibsRateApplied       Decimal?      @db.Decimal(7, 4)
-  cbsRateApplied       Decimal?      @db.Decimal(7, 4)
+  icmsRateApplied      Decimal?        @db.Decimal(7, 4)
+  ibsRateApplied       Decimal?        @db.Decimal(7, 4)
+  cbsRateApplied       Decimal?        @db.Decimal(7, 4)
   // Preço final. Caminho TABELA: conhecido no INSERT (cálculo de frete
   // real ainda não existe, quem chama informa). Caminho CUSTO: só existe
   // depois do fechamento — soma dos custos + recomposição de imposto +
   // margem (D-041).
-  total                Decimal?      @db.Decimal(14, 2)
+  total                Decimal?        @db.Decimal(14, 2)
   // Validade da proposta ("válida até dia 15") — DATE, não timestamptz:
   // EXCEÇÃO À D-016, mesmo critério e mesmo tratamento da D-045 (hora de
   // PickupOrder). Data de calendário acordada com o cliente, não
@@ -563,7 +668,7 @@ model Quote {
   // (QuoteService.close()), mesmo mecanismo de GRANT de coluna das
   // alíquotas — calculada por computeQuoteValidUntil (@mash/shared) a
   // partir de um prazo em dias ou meses informado por quem fecha.
-  validUntil           DateTime?     @db.Date
+  validUntil           DateTime?       @db.Date
   // Revisão (desconto na mesma negociação) ou recotação (negociação
   // nova, carga podendo ser a mesma) — um campo só cobre os dois casos,
   // a distinção é DERIVADA (createdAt da filha antes/depois do
@@ -576,9 +681,9 @@ model Quote {
   // tenant nunca é um previousQuoteId alcançável na prática. CHECK na
   // migração impede autorreferência; ciclo de profundidade > 1 é risco
   // aceito, sem detecção construída (ver decisoes.md).
-  previousQuoteId      String?       @db.Uuid
-  previousQuote        Quote?        @relation("QuoteRevision", fields: [previousQuoteId], references: [id])
-  revisions            Quote[]       @relation("QuoteRevision")
+  previousQuoteId      String?         @db.Uuid
+  previousQuote        Quote?          @relation("QuoteRevision", fields: [previousQuoteId], references: [id])
+  revisions            Quote[]         @relation("QuoteRevision")
   // Quantidade de viagens cotadas (unidade "caminho CUSTO → Order") —
   // evidência real: e-mail cotando 4 contêineres com lacre individual,
   // planilha com um processo de 5 caminhões (CT-e 7581-7585). NOT NULL
@@ -589,9 +694,9 @@ model Quote {
   // de coluna de validUntil (D-046) — close() aceita quantity junto do
   // prazo de validade; sem informar, mantém o valor atual (1, se nunca
   // mudado). accept() usa este valor pra decidir quantas Trip criar.
-  quantity             Int           @default(1)
-  createdAt            DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime      @updatedAt @db.Timestamptz(3)
+  quantity             Int             @default(1)
+  createdAt            DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @db.Timestamptz(3)
   orders               Order[]
   // Linhas de custo (D-041) — só existem no caminho CUSTO. Tabela filha,
   // nunca coluna fixa (mesmo critério de PickupOrderItem/CarrierPayment):
@@ -732,11 +837,11 @@ model TaxRate {
   icmsOperationType IcmsOperationType?
   // Escala de percentual (D-013, que já cita ICMS como exemplo textual
   // de numeric(7,4)).
-  rate      Decimal  @db.Decimal(7, 4)
+  rate              Decimal            @db.Decimal(7, 4)
   // Datas de calendário, não timestamp (D-016) — vigência de lei não tem
   // hora.
-  validFrom DateTime @db.Date
-  validTo   DateTime @db.Date
+  validFrom         DateTime           @db.Date
+  validTo           DateTime           @db.Date
   // Marca alíquota-placeholder — valor plausível, não pesquisado, "a
   // calibrar com o contador" (D-041). As 27 linhas de ICMS interna
   // semeadas nascem `true`; IBS/CBS e ICMS interestadual (dado real —
@@ -745,11 +850,11 @@ model TaxRate {
   // produção — TaxRateService.findRate() recusa devolver uma linha
   // `isPlaceholder = true` fora de dev/test (NODE_ENV), e é essa recusa
   // em código, não este comentário, que garante a coisa.
-  isPlaceholder Boolean @default(false)
+  isPlaceholder     Boolean            @default(false)
   // D-043 — ver comentário acima do model.
-  composesPrice Boolean @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  composesPrice     Boolean            @default(true)
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
 
   @@index([taxType, uf])
   @@index([taxType, icmsOperationType])
@@ -776,14 +881,14 @@ model TaxRate {
 // lado do PREÇO decomposto por componente/situação fiscal ainda não foi
 // modelado, só o lado do CUSTO (QuoteCostLine) existe.
 model IbsCbsTaxSituation {
-  id        String   @id @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
-  cst       String   @db.Char(3)
-  cClassTrib String  @db.Char(6)
-  name      String
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  id         String   @id @db.Uuid
+  tenantId   String?  @db.Uuid
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id])
+  cst        String   @db.Char(3)
+  cClassTrib String   @db.Char(6)
+  name       String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([tenantId, cst, cClassTrib])
 }
@@ -847,11 +952,11 @@ model OrderStatus {
 // número pra reuso. DELETE também revogado (D-017: movimento financeiro
 // nunca se apaga — "cancelado" é estado, não remoção).
 model Order {
-  id                   String      @id @db.Uuid
-  tenantId             String      @db.Uuid
-  tenant               Tenant      @relation(fields: [tenantId], references: [id])
-  branchId             String      @db.Uuid
-  branch               Branch      @relation(fields: [branchId], references: [id])
+  id                   String       @id @db.Uuid
+  tenantId             String       @db.Uuid
+  tenant               Tenant       @relation(fields: [tenantId], references: [id])
+  branchId             String       @db.Uuid
+  branch               Branch       @relation(fields: [branchId], references: [id])
   // Número de negócio (D-015) — nunca a PK, nunca aparece como UUID pro
   // operador. Atribuído por DocumentCounter (mesmo mecanismo que vai
   // servir CT-e/fatura), dentro da MESMA transação do INSERT desta linha
@@ -870,31 +975,31 @@ model Order {
   // máximo um pedido — o banco garante (Postgres trata NULL como
   // distinto num índice único comum, então N Order com quoteId nulo,
   // caminho createFromFreightRate, continuam livres).
-  quoteId              String?     @unique @db.Uuid
-  quote                Quote?      @relation(fields: [quoteId], references: [id])
+  quoteId              String?      @unique @db.Uuid
+  quote                Quote?       @relation(fields: [quoteId], references: [id])
   // Nuláveis (unidade "caminho CUSTO → Order"): caminho TABELA continua
   // preenchendo os quatro sempre; caminho CUSTO (via Quote sem
   // FreightRate) deixa os quatro nulos — total já cobre o preço nesse
   // caso. CHECK "Order_pricing_path_exclusive" na migração garante que
   // não se misturam, mesmo mecanismo do Quote_pricing_path_exclusive
   // (D-041).
-  freightRateId        String?     @db.Uuid
+  freightRateId        String?      @db.Uuid
   freightRate          FreightRate? @relation(fields: [freightRateId], references: [id])
-  senderId             String      @db.Uuid
-  sender               Party       @relation("OrderSender", fields: [senderId], references: [id])
-  recipientId          String      @db.Uuid
-  recipient            Party       @relation("OrderRecipient", fields: [recipientId], references: [id])
-  tomadorId            String      @db.Uuid
-  tomador              Party       @relation("OrderTomador", fields: [tomadorId], references: [id])
+  senderId             String       @db.Uuid
+  sender               Party        @relation("OrderSender", fields: [senderId], references: [id])
+  recipientId          String       @db.Uuid
+  recipient            Party        @relation("OrderRecipient", fields: [recipientId], references: [id])
+  tomadorId            String       @db.Uuid
+  tomador              Party        @relation("OrderTomador", fields: [tomadorId], references: [id])
   // Congelado na criação — cópia, não consulta. Escalas de D-013.
-  rate                 Decimal?    @db.Decimal(18, 6)
-  minimumFreight       Decimal?    @db.Decimal(14, 2)
-  additionalPercentage Decimal?    @db.Decimal(7, 4)
-  total                Decimal     @db.Decimal(14, 2)
+  rate                 Decimal?     @db.Decimal(18, 6)
+  minimumFreight       Decimal?     @db.Decimal(14, 2)
+  additionalPercentage Decimal?     @db.Decimal(7, 4)
+  total                Decimal      @db.Decimal(14, 2)
   // Único campo que legitimamente mudava depois da criação até D-042 —
   // nasce "em andamento", UPDATE liberado a mash_app.
-  statusId             String      @db.Uuid
-  status               OrderStatus @relation(fields: [statusId], references: [id])
+  statusId             String       @db.Uuid
+  status               OrderStatus  @relation(fields: [statusId], references: [id])
   // Fatura que agrupa este pedido (D-042) — nulo até ser faturado. Sem
   // tabela de junção: evidência é 1 Order pertence a no máximo 1 Invoice,
   // não N:N (CLAUDE.md 2, sem estrutura que ninguém pediu). GRANT UPDATE
@@ -902,10 +1007,10 @@ model Order {
   // indefinidamente (mesmo risco já aceito em statusId/D-038 e
   // FreightRate.validTo/D-014: disciplina de uso é da aplicação, não
   // travada em CHECK que precisaria enxergar o valor anterior).
-  invoiceId            String?     @db.Uuid
-  invoice              Invoice?    @relation(fields: [invoiceId], references: [id])
-  createdAt            DateTime    @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime    @updatedAt @db.Timestamptz(3)
+  invoiceId            String?      @db.Uuid
+  invoice              Invoice?     @relation(fields: [invoiceId], references: [id])
+  createdAt            DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime     @updatedAt @db.Timestamptz(3)
   trips                Trip[]
 
   @@unique([tenantId, branchId, number])
@@ -1622,22 +1727,22 @@ model DocumentCounter {
 // Order.invoiceId, não daqui). DELETE revogado (D-017: histórico
 // financeiro nunca se apaga).
 model Invoice {
-  id        String   @id @db.Uuid
-  tenantId  String   @db.Uuid
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  id               String            @id @db.Uuid
+  tenantId         String            @db.Uuid
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
   // Movimento é da filial (D-011) — mesmo critério de Order/Trip.
-  branchId  String   @db.Uuid
-  branch    Branch   @relation(fields: [branchId], references: [id])
+  branchId         String            @db.Uuid
+  branch           Branch            @relation(fields: [branchId], references: [id])
   // Tomador cobrado — reaproveita Party (D-018), não cadastro próprio.
-  partyId   String   @db.Uuid
-  party     Party    @relation(fields: [partyId], references: [id])
+  partyId          String            @db.Uuid
+  party            Party             @relation(fields: [partyId], references: [id])
   // Número de negócio (D-015), mesmo mecanismo de Order.number —
   // DocumentCounter com documentType=INVOICE, atribuído na mesma
   // transação do INSERT.
-  number    Int
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  orders    Order[]
-  boletos   Boleto[]
+  number           Int
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  orders           Order[]
+  boletos          Boleto[]
   receivableEvents ReceivableEvent[]
 
   @@unique([tenantId, branchId, number])

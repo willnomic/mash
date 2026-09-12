@@ -51,6 +51,9 @@ export class SessionService {
 
     const user = await forTenant(session.tenantId).user.findUnique({
       where: { id: session.userId },
+      include: {
+        group: { include: { groupPermissions: { include: { permission: true } } } },
+      },
     });
     // Usuário inativado (D-017) ou apagado: derruba a sessão mesmo que a
     // linha ainda não tenha expirado — é o motivo decisivo da D-048 pra
@@ -59,10 +62,23 @@ export class SessionService {
       return null;
     }
 
+    // Permissões efetivas (unidade "papéis e permissões"): isAdmin
+    // ignora grupo e tem TUDO — resolvido aqui como "todo código que
+    // existe no catálogo", não como um caso especial espalhado pelo
+    // PermissionGuard, pra `/me` também devolver a lista completa sem
+    // lógica duplicada. base.permission (não forTenant): Permission não
+    // tem tenantId, é catálogo global (RLS USING(true), mesmo
+    // tratamento de TaxRate).
+    const permissions = user.isAdmin
+      ? new Set((await base.permission.findMany({ select: { code: true } })).map((p) => p.code))
+      : new Set(user.group?.groupPermissions.map((gp) => gp.permission.code) ?? []);
+
     return {
       userId: session.userId,
       tenantId: session.tenantId,
       role: user.role,
+      isAdmin: user.isAdmin,
+      permissions,
     };
   }
 

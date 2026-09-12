@@ -32,7 +32,11 @@ export const EntityCombobox = forwardRef<
     isLoading?: boolean
     placeholder?: string
     createLabel: string
-    onRequestCreate: (query: string) => void
+    // Opcional (unidade "papéis e permissões", item 5): sem
+    // registration.create, quem chama não passa esta prop — o "+
+    // Criar" some, não fica desabilitado sem explicação ("esconder,
+    // não desabilitar", o pedido).
+    onRequestCreate?: (query: string) => void
     ariaInvalid?: boolean
   }
 >(function EntityCombobox(
@@ -86,6 +90,7 @@ export const EntityCombobox = forwardRef<
   }
 
   function requestCreate() {
+    if (!onRequestCreate) return
     const typed = query
     setOpen(false)
     setQuery('')
@@ -138,14 +143,16 @@ export const EntityCombobox = forwardRef<
               {option.label}
             </button>
           ))}
-          <button
-            type="button"
-            className="flex w-full items-center border-t border-border px-3 py-1.5 text-left text-sm text-primary hover:bg-accent"
-            onClick={requestCreate}
-          >
-            + Criar {createLabel}
-            {query ? ` "${query}"` : ''}
-          </button>
+          {onRequestCreate && (
+            <button
+              type="button"
+              className="flex w-full items-center border-t border-border px-3 py-1.5 text-left text-sm text-primary hover:bg-accent"
+              onClick={requestCreate}
+            >
+              + Criar {createLabel}
+              {query ? ` "${query}"` : ''}
+            </button>
+          )}
         </div>
       )}
     </div>

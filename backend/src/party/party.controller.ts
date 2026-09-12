@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { createPartySchema, cnpjFieldSchema } from '@mash/shared';
 import { z } from 'zod';
+import { RequirePermission } from '../auth/permission.decorator.js';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 import { CnpjLookupService } from './cnpj-lookup.service.js';
 
@@ -28,6 +29,9 @@ export class PartyController {
     private readonly cnpjLookupService: CnpjLookupService,
   ) {}
 
+  // "partes e filiais (ver, criar)" é um domínio só (unidade "papéis e
+  // permissões", item 2) — mesma permissão de BranchController.
+  @RequirePermission('registration.view')
   @Get()
   list() {
     return this.tenantPrisma.db.party.findMany({
@@ -43,6 +47,9 @@ export class PartyController {
   // aceita sem consulta nenhuma). Sempre 200 quando o formato é válido,
   // mesmo se o CNPJ não existir ou a BrasilAPI estiver fora do ar —
   // `found:false`+`reason` é resultado normal, não erro HTTP.
+  // Auxílio do fluxo de CRIAÇÃO (D-052) — mesma permissão de
+  // registration.create, nunca alcançável fora dele.
+  @RequirePermission('registration.create')
   @Get('cnpj/:cnpj')
   async lookupCnpj(@Param('cnpj') cnpj: string) {
     const parsed = cnpjParamSchema.safeParse({ cnpj });
@@ -58,6 +65,7 @@ export class PartyController {
   // que o operador digita nesta unidade, é auto-preenchido pela
   // consulta; falhar a requisição inteira por causa dele seria a
   // consulta "requisito" disfarçada de "auxílio").
+  @RequirePermission('registration.create')
   @Post()
   async create(@Body() body: unknown) {
     let parsed = createPartySchema.safeParse(body);

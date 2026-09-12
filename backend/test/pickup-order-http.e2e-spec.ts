@@ -81,6 +81,7 @@ describe('PickupOrder · rota HTTP (D-027)', () => {
         name: 'Operador A',
         role: 'OPERATOR',
         active: true,
+        isAdmin: true,
       },
     });
 
@@ -110,6 +111,7 @@ describe('PickupOrder · rota HTTP (D-027)', () => {
         name: 'Operador A',
         role: 'OPERATOR',
         active: true,
+        isAdmin: true,
       },
     });
 

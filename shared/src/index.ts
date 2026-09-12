@@ -6,3 +6,4 @@ export * from './brazil/index.js';
 export * from './quote/index.js';
 export * from './party/index.js';
 export * from './branch/index.js';
+export * from './permission/index.js';

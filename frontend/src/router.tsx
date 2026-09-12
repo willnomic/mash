@@ -5,6 +5,7 @@ import { LoginPage } from '@/routes/login'
 import { QuoteListPage } from '@/routes/quote-list'
 import { QuoteCostBasedPage } from '@/routes/quote-cost-based'
 import { QuoteDetailPage } from '@/routes/quote-detail'
+import { TenantSettingsPage } from '@/routes/tenant-settings'
 
 // Roteador tipado — TanStack Router, não React Router (D-021/D-048
 // deixaram a escolha entre os dois em aberto). Decisão desta unidade:
@@ -67,9 +68,24 @@ const quoteDetailRoute = createRoute({
   component: QuoteDetailPage,
 })
 
+// Placeholder (unidade "papéis e permissões", item 5) — mesmo critério
+// de home.tsx antes da D-054: a tela de verdade é a próxima unidade, o
+// que existe aqui é só o suficiente pra settings.view ter alguma coisa
+// concreta pra esconder/mostrar na sidebar.
+const tenantSettingsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/configuracoes',
+  component: TenantSettingsPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([homeRoute, quoteCostBasedRoute, quoteDetailRoute]),
+  appRoute.addChildren([
+    homeRoute,
+    quoteCostBasedRoute,
+    quoteDetailRoute,
+    tenantSettingsRoute,
+  ]),
 ])
 
 export const router = createRouter({ routeTree })

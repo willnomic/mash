@@ -30,6 +30,7 @@ import {
   type ValidityTermInput,
 } from '@/hooks/use-quote-detail'
 import { useParties } from '@/hooks/use-parties'
+import { usePermissions } from '@/hooks/use-session'
 import { useBranches } from '@/hooks/use-branches'
 import type { CreatedParty } from '@/hooks/use-create-party'
 import type { CreatedBranch } from '@/hooks/use-create-branch'
@@ -86,6 +87,7 @@ export function QuoteDetailPage() {
   const rejectMutation = useRejectQuote(quoteId)
   const parties = useParties()
   const branches = useBranches()
+  const { hasPermission } = usePermissions()
 
   const [pendingClose, setPendingClose] = useState<ValidityTermInput | null>(
     null,
@@ -365,7 +367,7 @@ export function QuoteDetailPage() {
           {/* Rascunho: fechar com prazo obrigatório (D-050). Fechar é
               irreversível — botão só mostra a confirmação, quem fecha
               de fato é "Sim, fechar". */}
-          {q.statusCode === 'OPEN' && (
+          {q.statusCode === 'OPEN' && hasPermission('quote.close') && (
             <div className="flex flex-col gap-2 border-t border-border pt-3">
               <span className="text-sm font-medium">Fechar cotação</span>
               <div className="flex gap-2">
@@ -440,7 +442,7 @@ export function QuoteDetailPage() {
           )}
 
           {/* Fechada e válida: aceitar cria o pedido, ou recusar. */}
-          {q.statusCode === 'CLOSED' && !q.isExpired && (
+          {q.statusCode === 'CLOSED' && !q.isExpired && hasPermission('quote.accept') && (
             <div className="flex flex-col gap-2 border-t border-border pt-3">
               <span className="text-sm font-medium">Aceitar cotação</span>
               <div className="flex flex-col gap-1">
@@ -458,8 +460,10 @@ export function QuoteDetailPage() {
                   isLoading={branches.isLoading}
                   createLabel="filial"
                   ariaInvalid={Boolean(acceptForm.formState.errors.branchId)}
-                  onRequestCreate={(query) =>
-                    setCreateBranchRequest({ query })
+                  onRequestCreate={
+                    hasPermission('registration.create')
+                      ? (query) => setCreateBranchRequest({ query })
+                      : undefined
                   }
                 />
               </div>
@@ -481,8 +485,10 @@ export function QuoteDetailPage() {
                     isLoading={parties.isLoading}
                     createLabel="cliente"
                     ariaInvalid={Boolean(acceptForm.formState.errors[field])}
-                    onRequestCreate={(query) =>
-                      setCreatePartyRequest({ field, query })
+                    onRequestCreate={
+                      hasPermission('registration.create')
+                        ? (query) => setCreatePartyRequest({ field, query })
+                        : undefined
                     }
                   />
                 </div>
@@ -543,7 +549,7 @@ export function QuoteDetailPage() {
           {/* Recusar: disponível pra Fechada (vencida ou não), nunca
               pra Rascunho/Aceita/Recusada — a tela só mostra o botão
               quando statusCode é CLOSED. */}
-          {q.statusCode === 'CLOSED' && (
+          {q.statusCode === 'CLOSED' && hasPermission('quote.reject') && (
             <div className="flex flex-col gap-2 border-t border-border pt-3">
               {!pendingReject ? (
                 <Button

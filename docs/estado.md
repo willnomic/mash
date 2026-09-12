@@ -1083,3 +1083,129 @@ que TanStack Table (D-021) é exercitado de verdade.
 
 **Fora do escopo, não construído (como pedido):** lista por processo/pedido, edição em
 linha, visões salvas por usuário, exportação, tela de cadastro completa.
+
+## Unidade "papéis e permissões" — modelo, semente, e a casca respeitando
+
+**Por quê:** pesquisa de mercado (ESL Cloud, Senior) — nenhum TMS de referência fixa
+papel no código; todos entregam usuário → grupo → permissões, com grupos semeados que
+cada transportadora altera, exclui ou duplica, e um marcador de administrador que ignora
+tudo. Revisa na prática a D-009 ("papel simples no usuário, matriz configurável é
+camada 3") — a matriz sobe pra agora.
+
+**Investigado antes de modelar (como exigido):**
+- `User.role: UserRole` (enum OPERATOR/MANAGER/FINANCE/ADMIN) já existe (D-009), viaja
+  até a sessão e o CLS (`tenant.guard.ts`), mas **nunca é lido por nenhuma decisão de
+  autorização** — `grep` em `src/` só acha atribuição, nunca leitura condicional.
+  Rudimentar e inerte, exatamente o "papel fixo no código" que a pesquisa mostra
+  abandonado. Não removido: apagaria/tocaria ~8 arquivos de teste que criam `User` só
+  por um campo que hoje não faz nada — fora do pedido desta unidade, fica como achado.
+- `GET /me` devolvia só `id/name/email/role/tenant`; `GET /me/users` é "superfície
+  mínima pra provar RLS" (comentário do próprio código), não a tela de gerenciar
+  usuários.
+- Guarda de rota hoje: `TenantGuard` global (`APP_GUARD`), allowlist por
+  `@Public()`/`Reflector` — sem `@Public()`, exige sessão válida; não existia noção de
+  permissão nenhuma além disso.
+- 18 endpoints reais existentes, inventariados um a um antes de decidir qual permissão
+  cada um ganha (lista completa abaixo).
+
+**Pronto:**
+- Migração `20260912000000_add_group_permission_model`: `Permission` (catálogo
+  GLOBAL, sem `tenantId` — mesmo tratamento de `TaxRate`, `USING(true)`, `INSERT`/
+  `UPDATE`/`DELETE` revogados de `mash_app`), `Group` (pertence ao tenant, `tenantId`
+  `NOT NULL` — decisão abaixo), `GroupPermission` (join table, `tenantId` próprio,
+  mesmo critério de toda tabela filha tenant-scoped), `User.groupId` (anulável) e
+  `User.isAdmin` (`DEFAULT false`).
+- 9 permissões semeadas, derivadas do que existe hoje:
+  - `QUOTE`: `quote.view`, `quote.create`, `quote.close`, `quote.accept`,
+    `quote.reject` — os cinco verbos do ciclo de vida da cotação (D-046/D-047).
+  - `REGISTRATION`: `registration.view`, `registration.create` — "partes e filiais" como
+    um domínio só (o pedido bundla os dois), cobre `Party` e `Branch` juntos.
+  - `TENANT_SETTINGS`: `settings.view`, `settings.change` — sem endpoint ainda (a
+    próxima unidade constrói a tela), semeadas agora pra ela nascer protegida.
+- Todos os 18 endpoints reais ganharam `@RequirePermission(code)` ou
+  `@NoPermissionRequired()` — nenhum ficou sem decisão. `PermissionGuard` (novo,
+  segundo `APP_GUARD`, roda depois do `TenantGuard`) lança
+  `InternalServerErrorException` se nenhum dos três marcadores
+  (`@Public()`/`@RequirePermission()`/`@NoPermissionRequired()`) existir — testado por
+  unidade (`permission.guard.spec.ts`), não só por convenção.
+- `SessionService.validate()` (já reconsultava `User` a cada requisição pra derrubar
+  sessão de usuário inativado, D-048) passou a resolver `isAdmin`/`permissions`
+  efetivas na MESMA consulta — sem round-trip extra. `isAdmin=true` resolve como "todo
+  código do catálogo", não um caso especial espalhado pelo guard.
+- `GET /me` devolve `isAdmin` + `permissions` (lista já resolvida — `isAdmin` já vira a
+  lista completa, a casca faz uma pergunta só).
+- Grupos "Operador" (7 permissões, tudo menos `settings.*`) e "Gestor" (9, tudo) nascem
+  DENTRO de cada tenant via `TenantsService.seedDefaultGroups()`, chamado por
+  `create()` (tenant novo, mesma transação que já cria a filial padrão, D-030) — não
+  duas linhas globais. Tenants que já existiam ganharam os grupos via
+  `scripts/backfill-tenant-groups.mjs` (roda uma vez, fora da migração — D-015 exige
+  UUID v7 gerado na aplicação, `gen_random_uuid()` no SQL geraria v4).
+- Todos os `User` que já existiam viraram `isAdmin=true` no backfill da migração —
+  preserva o acesso que já tinham (irrestrito) em vez de reduzir a zero por falta de
+  grupo. Usuário novo nasce sem grupo e sem admin — "sem acesso" é o estado explícito.
+- Casca esconde (item 5): sidebar mostra "Início"/"Cotação por
+  custo"/"Configuração" condicionados a `quote.view`/`quote.create`/`settings.view`,
+  com esqueleto enquanto a sessão carrega (nunca ausência súbita). Botões
+  Fechar/Aceitar/Recusar em `quote-detail.tsx` condicionados a
+  `quote.close`/`quote.accept`/`quote.reject`. `EntityCombobox` ganhou
+  `onRequestCreate` OPCIONAL — sem `registration.create`, o "+ Criar" simplesmente não
+  renderiza (esconder, não desabilitar, o pedido).
+- Placeholder `/configuracoes` (mesmo critério de `home.tsx` antes da D-054) — a tela
+  de verdade é a próxima unidade; o que existe agora é só o necessário pra
+  `settings.view` ter algo concreto pra esconder/mostrar.
+- Suítes: `shared` 129 (inalterado — só um vocabulário de códigos, sem schema Zod
+  novo), `backend` 27 unit + 391 e2e = **418** (377→418: +7 unit
+  `permission.guard.spec.ts`, +21 e2e: 4 novos em `tenant-provisioning`, 9 em
+  `group-permission-rls`, 8 em `permission-enforcement-http`), `frontend` 6
+  (inalterado, verificação manual). Build/lint limpos nos três workspaces.
+- Fiação: 7 pontos em 5 arquivos e2e (`isAdmin: true` nos usuários de teste que não são
+  sobre permissão) — nenhuma asserção mudou.
+- No navegador: operador vê sidebar sem "Configuração"; gestor vê "Configuração" e
+  abre o placeholder. Backend recusa de verdade testado por HTTP direto (não só tela
+  escondida): usuário sem grupo recebe 403 em `POST /quotes/cost-based`, `GET
+  /parties`, `GET /branches`; `isAdmin=true` sem grupo nenhum passa em tudo.
+- Banco de DESENVOLVIMENTO confirmado intacto depois da suíte e2e, contado como
+  `mash_owner` (D-053): 6 tenants preservados, 12 `Group`/96 `GroupPermission`/9
+  `Permission`, `Quote`/`User` batendo com o que esta sessão criou.
+
+**Modelagem comporta filial depois, sem remodelar (pergunta explícita do pedido):** sim.
+Tenant (RLS, "quais dados existem") já é ortogonal a Group/Permission ("o que se pode
+fazer", D-009) — filial seria um TERCEIRO eixo do mesmo jeito, um `branchId` anulável em
+`User` (ou em `Group`), sem tocar `Permission`/`Group`/`GroupPermission`. Nenhuma FK nova
+entre `Group` e `Branch` seria necessária.
+
+**Como garanti que endpoint sem permissão declarada não passa livre:** `PermissionGuard`
+lança erro se nenhum dos três marcadores existir — testado (`permission.guard.spec.ts`,
+o teste "rota sem @Public()... lança erro de programação"). Como TODOS os 18 endpoints
+reais já foram decorados, não há hoje uma rota real pra provar isso por HTTP sem
+adicionar um controller só pro teste — cobertura ficou no nível de unidade, deliberado
+(ver "Não verificado" no relatório da execução).
+
+**Decisões tomadas que não estavam no pedido:**
+- `pickup-order-http` (`GET /pickup-orders/:id/pdf`) não está nos três domínios que o
+  pedido lista (cotação/cadastro/configuração) — reaproveitou `quote.view` ("o fluxo
+  comercial inteiro", item 3), não ganhou módulo próprio pra um endpoint só.
+- `GET /quote-cost-types` e `GET /tax-rates/quote-preview` (auxiliares do formulário de
+  montar cotação) reaproveitaram `quote.create` — só alcançáveis de dentro daquele
+  fluxo, nunca isolados.
+- `GET /parties/cnpj/:cnpj` (consulta auxiliar da D-052) reaproveitou
+  `registration.create` pelo mesmo motivo.
+- `GET /me` e `GET /me/users` viraram `@NoPermissionRequired()`, não uma permissão de
+  negócio — identidade, não capacidade; `POST /auth/logout` também.
+- Paginação/página/tamanho não é o que muda aqui, mas a mesma régua de "todo endpoint
+  precisa de decisão" levou a criar `@NoPermissionRequired()` como terceiro marcador —
+  não pedido explicitamente, mas sem ele `/me` teria que inventar uma permissão falsa
+  ou virar um caso especial escondido dentro do guard.
+- `EntityCombobox.onRequestCreate` virou opcional (era obrigatório) — mudança mínima
+  pra "esconder, não desabilitar" funcionar sem duplicar o componente.
+- `scripts/backfill-tenant-groups.mjs` — não pedido nominalmente, mas necessário: sem
+  ele, os 6 tenants que já existiam nunca ganhariam Operador/Gestor, e "gestor: tudo do
+  operador mais configuração" ficaria sem verificação possível nesta sessão.
+
+**Não verificado:** cobertura HTTP de "endpoint sem permissão declarada" (só unitária,
+ver acima); "não deixar o tenant sem nenhum admin" (a Senior provavelmente impede
+remover o último admin — não construído, não existe tela de gerenciar usuário ainda
+pra isso importar); permissão por filial (fora de escopo, só confirmado que comporta).
+
+**Fora do escopo, não construído (como pedido):** tela de gerenciar grupos e usuários,
+alçada por valor, permissão por filial, dashboard, visibilidade financeira.

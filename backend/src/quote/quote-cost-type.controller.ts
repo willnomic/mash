@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { RequirePermission } from '../auth/permission.decorator.js';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 
 // Tabela de domínio (D-020): tenantId nulo = padrão do sistema,
@@ -11,6 +12,9 @@ import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
 export class QuoteCostTypeController {
   constructor(private readonly tenantPrisma: TenantPrisma) {}
 
+  // Auxílio do fluxo de MONTAR cotação (unidade "papéis e permissões")
+  // — mesma permissão de quote.create, nunca alcançável fora dele.
+  @RequirePermission('quote.create')
   @Get()
   list() {
     return this.tenantPrisma.db.quoteCostType.findMany({

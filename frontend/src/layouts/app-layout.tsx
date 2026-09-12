@@ -38,18 +38,42 @@ export function AppLayout() {
           Mash
         </div>
         <nav className="mt-2 flex flex-col gap-1">
-          <a
-            href="/"
-            className="rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-          >
-            Início
-          </a>
-          <a
-            href="/cotacoes/nova-por-custo"
-            className="rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-          >
-            Cotação por custo
-          </a>
+          {isLoading || !user ? (
+            // Esqueleto no formato do menu (D-049, item 6) — nunca
+            // ausência súbita nem item aparecendo e sumindo quando a
+            // permissão chega (unidade "papéis e permissões", item 5).
+            <>
+              <Skeleton className="h-7 w-full" />
+              <Skeleton className="h-7 w-full" />
+            </>
+          ) : (
+            <>
+              {user.permissions.includes('quote.view') && (
+                <a
+                  href="/"
+                  className="rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+                >
+                  Início
+                </a>
+              )}
+              {user.permissions.includes('quote.create') && (
+                <a
+                  href="/cotacoes/nova-por-custo"
+                  className="rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+                >
+                  Cotação por custo
+                </a>
+              )}
+              {user.permissions.includes('settings.view') && (
+                <a
+                  href="/configuracoes"
+                  className="rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+                >
+                  Configuração
+                </a>
+              )}
+            </>
+          )}
         </nav>
       </aside>
 

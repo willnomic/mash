@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { AuthService } from './auth.service.js';
 import { loginSchema } from '@mash/shared';
 import { Public } from './public.decorator.js';
+import { NoPermissionRequired } from './permission.decorator.js';
 import { SESSION_COOKIE_NAME, sessionCookieOptions } from './session-cookie.js';
 
 @Controller('auth')
@@ -29,6 +30,9 @@ export class AuthController {
   // sessão do cookie — chega aqui só com um token que existia de
   // verdade. Idempotente (SessionService.revoke não erra em token
   // desconhecido), então funciona igual mesmo chamado duas vezes.
+  // @NoPermissionRequired() (unidade "papéis e permissões"): sair não é
+  // capacidade de negócio, é identidade — todo usuário autenticado pode.
+  @NoPermissionRequired()
   @Post('logout')
   async logout(
     @Req() req: Request,

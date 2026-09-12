@@ -1,4 +1,5 @@
 import { Controller, Get, Header, Param, StreamableFile } from '@nestjs/common';
+import { RequirePermission } from '../auth/permission.decorator.js';
 import { PickupOrderService } from './pickup-order.service.js';
 
 // Gera o PDF sob demanda, na resposta — nunca grava em disco/storage, nunca
@@ -9,6 +10,13 @@ import { PickupOrderService } from './pickup-order.service.js';
 export class PickupOrderController {
   constructor(private readonly pickupOrderService: PickupOrderService) {}
 
+  // Não está na lista explícita da unidade "papéis e permissões" (item
+  // 2 cita só cotação/cadastro/configuração) — decisão desta unidade:
+  // ordem de coleta é documento operacional que nasce do fluxo
+  // comercial já existente ("operador: o fluxo comercial inteiro", item
+  // 3), reaproveita quote.view em vez de inventar um módulo novo pra um
+  // endpoint só. Relatado, não escondido.
+  @RequirePermission('quote.view')
   @Get(':id/pdf')
   @Header('Content-Type', 'application/pdf')
   @Header('Content-Disposition', 'inline; filename="ordem-de-coleta.pdf"')
