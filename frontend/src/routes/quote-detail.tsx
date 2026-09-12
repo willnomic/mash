@@ -19,6 +19,8 @@ import {
   type QuoteCloseFormValues,
 } from '@/lib/quote-close-form.schema'
 import { formatDecimalBRL, formatPercentBRL } from '@/lib/br-number'
+import { formatDate } from '@/lib/br-date'
+import { STATUS_TONE_CLASS } from '@/lib/status-tone'
 import { ApiRequestError } from '@/lib/api-client'
 import {
   useQuote,
@@ -51,11 +53,6 @@ const PARTY_ROLE_LABEL: Record<PartyRoleField, string> = {
   tomadorId: 'Tomador',
 }
 
-function formatDate(value: string | null) {
-  if (!value) return null
-  return new Date(value).toLocaleDateString('pt-BR', { timeZone: 'UTC' })
-}
-
 // Cinco estados (D-046/D-047/D-050), dois gravados e um derivado —
 // "vencida" nunca é lido do banco, é isExpired calculado no backend a
 // cada GET (isQuoteValidityExpired), nunca um status próprio.
@@ -74,12 +71,6 @@ function statusLabel(statusCode: string, isExpired: boolean, validUntil: string 
     text: `Fechada${validUntil ? `, válida até ${formatDate(validUntil)}` : ''}`,
     tone: 'neutral' as const,
   }
-}
-
-const TONE_CLASS: Record<string, string> = {
-  neutral: 'text-muted-foreground',
-  positive: 'text-foreground font-semibold',
-  negative: 'text-destructive font-semibold',
 }
 
 // Id de rota, não path — appRoute (router.tsx) é uma layout route sem
@@ -297,7 +288,7 @@ export function QuoteDetailPage() {
         <h1 className="text-base font-semibold text-foreground">
           Cotação por custo
         </h1>
-        <span className={`text-sm ${TONE_CLASS[status.tone]}`}>
+        <span className={`text-sm ${STATUS_TONE_CLASS[status.tone]}`}>
           {status.text}
         </span>
       </div>

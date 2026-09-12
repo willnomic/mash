@@ -25,11 +25,16 @@ function CommandDialog({
   onOpenChange,
   children,
   title = 'Paleta de comandos',
+  shouldFilter,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   children: React.ReactNode
   title?: string
+  // Unidade "lista de cotações": grupo com resultado vindo do servidor
+  // (Ctrl+K buscando cotação) não pode passar pelo filtro de texto
+  // local do cmdk — ele só sabe comparar contra o `value` de cada item.
+  shouldFilter?: boolean
 }) {
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -42,7 +47,10 @@ function CommandDialog({
           <DialogPrimitive.Title className="sr-only">
             {title}
           </DialogPrimitive.Title>
-          <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground">
+          <Command
+            shouldFilter={shouldFilter}
+            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
+          >
             {children}
           </Command>
         </DialogPrimitive.Content>

@@ -968,3 +968,118 @@ filtrar/identificar cada linha.
 
 **Fora do escopo, não construído (como pedido):** lista de cotações, tomador fiscal na
 cotação, tela de cadastro completa.
+
+## Unidade "lista de cotações" — primeira tela de chegada do sistema
+
+**Por quê:** a D-053 destravou "achar a cotação depois" e "saber pra quem ligar quando o
+prazo está vencendo" — sem lista, os dois continuam impossíveis. É também a primeira vez
+que TanStack Table (D-021) é exercitado de verdade.
+
+**Investigado antes de construir (como exigido):**
+- `GET /quotes/:id` devolve `{id, createdAt, statusCode, party, isExpired, validUntil,
+  icmsUf, marginPercentage, ..., total, quantity, costSubtotal, costLines[], order}` — a
+  lista reaproveita os nomes que fazem sentido por linha (`id`, `createdAt`,
+  `statusCode`, `isExpired`, `validUntil`, `party`, `total`), não inventa outros.
+- **A premissa sobre a D-051 não correspondia ao código.** O texto dizia que `GET
+  /parties`/`GET /branches` nasceram "com formato de resposta que comporta paginação
+  depois sem virar mudança de contrato", mas os dois devolvem array bruto — um array não
+  herda paginação sem quebrar quem já lê o array direto. Não existia formato nenhum pra
+  reaproveitar. Relatado antes de codar; desenhado um novo (ver decisão abaixo).
+- Colunas de `Quote` conferidas direto no schema antes de pedir qualquer campo.
+- `pg_trgm` já habilitado (D-038), mas só indexado em `Order.customerReference` — sem
+  índice em `Party.name`. Criado nesta unidade, mesmo padrão exato.
+
+**Pronto:**
+- Migração `20260911030000_quote_list_index_and_search`: `@@index([tenantId, statusId,
+  validUntil])` (cobre filtro+ordenação da visão padrão juntos) e `Party_name_trgm_idx`
+  (GIN trigram, mesmo padrão da D-038 — invisível ao `schema.prisma`, mesma razão que o
+  índice do `customerReference` também é).
+- `listQuotesQuerySchema` (`@mash/shared`) — `status` (cinco valores de FILTRO, não os
+  quatro `QuoteStatus.code` reais: `CLOSED_EXPIRED` nunca é gravado, D-046), `partyId`,
+  `q`, `page`/`pageSize` (`z.coerce.number()`, serve tanto o `req.query` do Nest — sempre
+  string — quanto o `search` já tipado do TanStack Router).
+- `QuoteService.list()` — visão PADRÃO (sem `status` na URL) é `CLOSED` + `validUntil`
+  não vencido, ordenada por `validUntil` ASC (nulls last) e `createdAt` DESC como
+  desempate — "o que está esperando resposta e vai vencer" primeiro, nunca a lista
+  inteira por data de criação. `CLOSED_EXPIRED` traduz pra `statusId=CLOSED AND
+  validUntil < agora` — nunca statusId próprio, nunca job periódico (D-046). Busca por
+  cliente via `party.name.contains + mode:insensitive` (ILIKE acelerado pelo trigram).
+  Filtro/busca/paginação inteiramente no servidor (`skip`/`take`), banco de teste
+  confirma via 13 testes e2e novos (`quote-list-http.e2e-spec.ts`), incluindo RLS.
+- `GET /quotes` — mesmo padrão de erro dos outros (`BadRequestException(zod.flatten())`),
+  nasce com a tela (D-048), devolve `{items, total, page, pageSize}`.
+- Tela `/` (antiga casca placeholder da D-049, agora removida — `home.tsx` apagado):
+  cliente, preço final, estado, validade, criada em. Estado é o que organiza (cinco
+  estados, "vencida" em vermelho — nunca lido do banco). Filtro por estado, filtro por
+  cliente (`<select>`) e busca por texto (debounce 300ms) — os três no servidor, os três
+  na URL (`page` reseta a 1 quando qualquer filtro muda). `@tanstack/react-table` v8
+  (`useReactTable`/`getCoreRowModel`/`flexRender`) só pra estrutura de colunas — sem
+  sort/filter/pagination embutidos do lado do cliente, os três já são do servidor.
+- Teclado: setas (↑/↓) movem a linha ativa dentro de um container `role="table"` focável,
+  Enter abre. Esqueleto no formato da tabela no carregamento inicial;
+  `keepPreviousData` (TanStack Query) evita esqueleto piscando ao trocar página/filtro —
+  a tabela anterior fica visível com um "Atualizando..." discreto até o novo dado chegar.
+- Ctrl+K (D-048/D-049): grupo "Cotações" reaproveita o MESMO `GET /quotes` (`q` + 
+  `pageSize: 5`), sem endpoint novo — `CommandDialog` ganhou um `shouldFilter` pra não
+  deixar o filtro de texto embutido do `cmdk` brigar com resultado vindo do servidor.
+- **Achado que bloqueava a própria métrica da unidade:** `AppLayout` usava `min-h-screen`
+  (piso, não teto) e `<main>` sem `overflow` — nenhuma tela anterior tinha conteúdo alto
+  o bastante pra expor isso (a página inteira crescia e ROLAVA JUNTO COM A SIDEBAR em vez
+  de só a área de dado rolar). Corrigido pra `h-screen overflow-hidden` na casca e
+  `min-h-0 flex-1 overflow-hidden` em `<main>` — cabeçalho/filtro/paginação ficam fixos,
+  só as linhas da tabela rolam. Reconferido que `quote-cost-based`/`quote-detail`
+  continuam cabendo em 1366×768 sem regressão.
+- **14 linhas cabem em 1366×768 sem rolar** (medido: área de linhas com 506px de altura
+  útil ÷ 36px por linha = 14 completas; a 15ª aparece cortada, acessível pela rolagem
+  interna da tabela — só ela rola, não a tela toda).
+- Suítes: `shared` 122→**129** (+7: `listQuotesQuerySchema`), `backend` 377→**390** (20
+  unit + 370 e2e, +13 novos em `quote-list-http.e2e-spec.ts`), `frontend` 6→6 (sem teste
+  novo, verificação manual). Build e lint limpos nos três workspaces.
+- Testado no navegador, com teclado: 35 cotações criadas (via `fetch` autenticado no
+  console, mesma sessão real — criar 35 clicando um SELECT por vez não testaria nada que
+  os cliques em si já não provassem) cobrindo os cinco estados e mais de uma página;
+  percorrida com ↑/↓, aberta com Enter, voltada com o histórico do navegador (filtro e
+  página preservados pela URL); filtro por estado (Rascunho/Fechada/Fechada e
+  vencida/Aceita/Recusada) e por cliente conferidos um a um; busca por "translog" achou
+  só a Party certa; paginação (25 fechadas, pageSize 20) dividiu 20+5 sem repetir nem
+  perder id; Ctrl+K achou cotação por nome de cliente e navegou certo.
+- Banco de DESENVOLVIMENTO confirmado intacto depois da suíte e2e e do teste manual —
+  contado como `mash_owner` (D-053: contar como `mash_app` sem tenant no contexto zera
+  por RLS e engana).
+
+**Decisões tomadas que não estavam no pedido:**
+- Envelope `{items, total, page, pageSize}` pra `GET /quotes` — a D-051 não deixou nada
+  reaproveitável de verdade (achado acima); aditivo por construção, campo novo depois não
+  quebra quem já lê `items`/`total`.
+- Paginação por página/tamanho com contagem total (`skip`/`take` + `count()`), não por
+  cursor — "milhares" de cotações por ano não é a escala onde `OFFSET` degrada de forma
+  que importe, e página/tamanho integra direto com `manualPagination` do TanStack Table
+  sem inventar mecanismo de cursor que ninguém pediu.
+- `@tanstack/react-table` fixado em v8 (`8.21.3`), não v9 (a mais nova, `9.2.4`) — a v9
+  reescreveu a API inteira (`useTable`/`createTableHook`, arquitetura nova) e só mantém a
+  API conhecida (`useReactTable`/`getCoreRowModel`) atrás de um import `/legacy`
+  explicitamente marcado como legado. Começar o primeiro uso real da biblioteca já em
+  cima do caminho "legado" não fazia sentido; v8 é madura, documentada, e é a API que o
+  resto do ecossistema (exemplos, Stack Overflow, o que um desenvolvedor solo vai
+  encontrar) ainda assume.
+- `/` deixou de ser placeholder (D-049) e passa a ser a lista — não uma rota nova em
+  `/cotacoes` com redirecionamento: "primeira tela de chegada" só faz sentido sendo
+  literalmente o que `/` mostra, e o próprio comentário do `home.tsx` já antecipava essa
+  substituição.
+- Foco inicial no CONTAINER da tabela, não na busca — decisão explícita pedida no
+  enunciado: esta é a primeira tela em que o operador chega sem saber o que quer (item
+  5), então setas pra varrer a lista servem mais gente do que focar um campo de texto que
+  só ajuda quem já sabe o nome do cliente.
+- "Posição" preservada ao voltar (item 6) é só filtro+página, via URL — a linha ativa
+  reseta pra topo a cada carregamento da lista, não persiste índice entre navegações: o
+  dado pode ter mudado (a cotação que acabou de ser fechada/aceita não é mais a mesma
+  linha na visão padrão), e o `staleTime` default (0) já refaz a busca ao voltar.
+- Correção do `AppLayout` (`min-h-screen`→`h-screen`, `<main>` ganhou
+  `overflow-hidden`) — não pedida, mas sem ela a própria métrica pedida (linhas em
+  1366×768) não tinha resposta correta: a tela inteira rolava, não só a tabela.
+- Extraídos `formatDate` (`lib/br-date.ts`) e `STATUS_TONE_CLASS` (`lib/status-tone.ts`)
+  de dentro de `quote-detail.tsx`, que os tinha só localmente — segundo uso real, D-021
+  antirredundância.
+
+**Fora do escopo, não construído (como pedido):** lista por processo/pedido, edição em
+linha, visões salvas por usuário, exportação, tela de cadastro completa.

@@ -1,7 +1,8 @@
 import { Outlet, createRootRoute, createRoute, createRouter } from '@tanstack/react-router'
+import { listQuotesQuerySchema } from '@mash/shared'
 import { AppLayout } from '@/layouts/app-layout'
 import { LoginPage } from '@/routes/login'
-import { HomePage } from '@/routes/home'
+import { QuoteListPage } from '@/routes/quote-list'
 import { QuoteCostBasedPage } from '@/routes/quote-cost-based'
 import { QuoteDetailPage } from '@/routes/quote-detail'
 
@@ -34,16 +35,22 @@ const appRoute = createRoute({
   component: AppLayout,
 })
 
+// Primeira tela de chegada do sistema (unidade "lista de cotações") —
+// substitui o placeholder que a D-049 deixou aqui de propósito ("esta
+// unidade é a casca, não a primeira tela de negócio"). Estado de
+// filtro/busca/página vive na URL (D-049/D-051), validado pelo MESMO
+// schema Zod que o backend usa em GET /quotes — zod v4 implementa
+// Standard Schema, validateSearch aceita o schema direto, sem wrapper.
 const homeRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/',
-  component: HomePage,
+  validateSearch: listQuotesQuerySchema,
+  component: QuoteListPage,
 })
 
 // Primeira tela de negócio (D-041/D-046/D-048/D-049, unidade "cotação
-// por custo, parte 1"). Caminho por TABELA (D-018) e lista de cotações
-// (D-048, item 3) ainda não existem — sem menu de "Comercial" agrupando
-// nada ainda, só esta rota direta.
+// por custo, parte 1"). Caminho por TABELA (D-018) ainda não existe —
+// sem menu de "Comercial" agrupando nada ainda, só esta rota direta.
 const quoteCostBasedRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/cotacoes/nova-por-custo',
@@ -52,8 +59,8 @@ const quoteCostBasedRoute = createRoute({
 
 // Detalhe de UMA cotação por id direto (unidade "cotação por custo,
 // parte 2") — fechar/aceitar/recusar, e o link que a parte 1 abre
-// depois de salvar o rascunho. Não é lista de cotações (fora de
-// escopo): sem busca, sem navegação entre várias, só o link direto.
+// depois de salvar o rascunho, e agora também o link que a lista abre
+// (unidade "lista de cotações").
 const quoteDetailRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/cotacoes/$id',

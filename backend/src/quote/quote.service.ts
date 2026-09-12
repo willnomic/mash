@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import {
   computeQuoteValidUntil,
   isQuoteValidityExpired,
   type QuoteValidityTerm,
+  type ListQuotesQuery,
   calculateQuotePricing,
 } from '@mash/shared';
 import { TenantPrisma } from '../tenant/tenant-prisma.service.js';
@@ -329,6 +331,93 @@ export class QuoteService {
         data: { statusId: rejectedStatus.id },
       });
     });
+  }
+
+  // Lista de cotações (unidade "lista de cotações") — primeira tela de
+  // chegada. Sem filtro de status explícito, a visão padrão é "Fechada
+  // e válida" ordenada por validUntil mais próximo primeiro: é a
+  // pergunta que a tela existe para responder ("o que está esperando
+  // resposta e vai vencer?"), não a lista inteira por data de criação.
+  //
+  // CLOSED_EXPIRED é só um valor de FILTRO (nunca statusId gravado,
+  // D-046): traduzido em "statusId=CLOSED AND validUntil < agora".
+  // CLOSED (sem "_EXPIRED") passa a significar só a fatia VÁLIDA aqui —
+  // não o status bruto do banco, que sozinho mistura válida e vencida.
+  //
+  // Paginação e filtro/busca correm no banco (não no cliente): a lista
+  // cresce pra milhares de linhas por ano.
+  async list(query: ListQuotesQuery) {
+    const db = this.tenantPrisma.db;
+    const referenceDate = new Date();
+
+    const where: Prisma.QuoteWhereInput = {};
+    if (query.partyId) {
+      where.partyId = query.partyId;
+    }
+    // Busca por nome do cliente (D-038, mesmo padrão): contains +
+    // mode insensitive vira ILIKE '%...%' no Postgres, acelerado pelo
+    // índice GIN trigram em Party.name (migração desta unidade) — sem
+    // isso cairia em sequential scan.
+    if (query.q) {
+      where.party = { name: { contains: query.q, mode: 'insensitive' } };
+    }
+
+    const effectiveStatus = query.status ?? 'CLOSED';
+    if (effectiveStatus === 'CLOSED_EXPIRED') {
+      const closedStatus = await db.quoteStatus.findFirstOrThrow({
+        where: { code: QUOTE_STATUS_CLOSED },
+      });
+      where.statusId = closedStatus.id;
+      where.validUntil = { lt: referenceDate };
+    } else if (effectiveStatus === 'CLOSED') {
+      const closedStatus = await db.quoteStatus.findFirstOrThrow({
+        where: { code: QUOTE_STATUS_CLOSED },
+      });
+      where.statusId = closedStatus.id;
+      where.OR = [
+        { validUntil: null },
+        { validUntil: { gte: referenceDate } },
+      ];
+    } else {
+      const status = await db.quoteStatus.findFirstOrThrow({
+        where: { code: effectiveStatus },
+      });
+      where.statusId = status.id;
+    }
+
+    const [total, rows] = await Promise.all([
+      db.quote.count({ where }),
+      db.quote.findMany({
+        where,
+        include: { status: true, party: true },
+        // nulls "last": Rascunho/Aceita/Recusada podem não ter
+        // validUntil (D-046) — ficam depois das que têm data, nunca
+        // embaralhadas com elas. createdAt desc é o desempate, e o
+        // critério dentro de cada filtro por status isolado (ex.:
+        // Rascunho, onde validUntil é sempre nulo).
+        orderBy: [
+          { validUntil: { sort: 'asc', nulls: 'last' } },
+          { createdAt: 'desc' },
+        ],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+    ]);
+
+    return {
+      items: rows.map((quote) => ({
+        id: quote.id,
+        createdAt: quote.createdAt,
+        statusCode: quote.status.code,
+        isExpired: isQuoteValidityExpired(quote.validUntil, referenceDate),
+        validUntil: quote.validUntil,
+        party: { id: quote.party.id, name: quote.party.name },
+        total: quote.total,
+      })),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 
   private assertHasClosedPriceWithoutOutcome(quote: {

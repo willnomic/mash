@@ -602,6 +602,10 @@ model Quote {
   // Acesso que a lista de cotações (fora desta unidade, mas que esta
   // unidade destrava) vai precisar: cotações de um cliente.
   @@index([tenantId, partyId])
+  // Unidade "lista de cotações": a visão padrão ao abrir é
+  // status=CLOSED (válida) ordenada por validUntil ASC — este índice
+  // composto cobre filtro + ordenação juntos, sem sort separado.
+  @@index([tenantId, statusId, validUntil])
 }
 
 // Tipo de custo de viagem (D-041) — lista de domínio em tabela, não enum

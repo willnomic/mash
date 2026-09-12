@@ -8,6 +8,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -15,6 +16,7 @@ import {
   createCostBasedQuoteSchema,
   closeQuoteSchema,
   acceptQuoteSchema,
+  listQuotesQuerySchema,
   isQuoteValidityExpired,
 } from '@mash/shared';
 import { QuoteService } from './quote.service.js';
@@ -46,6 +48,22 @@ export class QuoteController {
 
     const quote = await this.quoteService.createCostBased(parsed.data);
     return { id: quote.id, createdAt: quote.createdAt };
+  }
+
+  // Lista de cotações (unidade "lista de cotações") — primeira tela de
+  // chegada do sistema. Filtro/busca/paginação no servidor (D-049/D-050:
+  // a lista cresce pra milhares). Mesmo endpoint alimenta o Ctrl+K
+  // (busca de entidade, D-048/D-049): a tela manda page/pageSize
+  // maiores, o Ctrl+K manda um "q" e um pageSize pequeno — nenhum
+  // endpoint separado.
+  @Get()
+  async list(@Query() query: unknown) {
+    const parsed = listQuotesQuerySchema.safeParse(query);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.flatten());
+    }
+
+    return this.quoteService.list(parsed.data);
   }
 
   // Estado completo de UMA cotação, por id direto — não é lista de
