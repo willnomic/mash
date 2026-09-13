@@ -412,12 +412,36 @@ model Party {
 // mesmo critério de exceção do D-007 que manteve Tomador/Embarcador.
 // Carrega tenantId e RLS próprios: não basta herdar do Party via join,
 // senão uma consulta crua nesta tabela vazaria entre tenants (D-012).
+//
+// partyId anulável (unidade "datas na viagem", corrige o que nasceu
+// NOT NULL): terminal, porto e fábrica recorrente pertencem a alguém —
+// endereço próprio de um cliente, reaproveitado toda vez que ele embarca
+// de novo. Coleta esporádica (endereço de terceiro avulso, ponto de
+// coleta de uma carga só) não pertence a ninguém do cadastro. Um
+// mecanismo só: Address é sempre a origem/destino da Trip, o que muda é
+// ter dono ou não — bifurcar em "endereço de Party" vs. "endereço solto"
+// vazaria pra busca, filtro, PDF e CT-e (sócio: "Porto de Itajaí" basta,
+// sem sub-terminal, sem hierarquia de recinto — não modelar hierarquia).
+//
+// businessHours: texto livre, mesmo critério de PickupOrder.businessHours
+// (D-034, seção 1.6 do CLAUDE.md — formato varia demais pra fixar regra).
+// Só faz sentido preencher quando há Party dona do endereço (terminal
+// fixo tem horário de funcionamento conhecido; coleta esporádica não tem
+// o que declarar) — não reforçado por CHECK, é convenção de preenchimento,
+// não invariante do banco. Fecha a pendência aberta na D-045 (Address sem
+// horário de funcionamento). Validação de janela contra este horário não
+// construída aqui (fora de escopo desta unidade).
 model Address {
   id                 String        @id @db.Uuid
   tenantId           String        @db.Uuid
   tenant             Tenant        @relation(fields: [tenantId], references: [id])
-  partyId            String        @db.Uuid
-  party              Party         @relation(fields: [partyId], references: [id])
+  partyId            String?       @db.Uuid
+  // onDelete explícito (Restrict): sem isto, o Prisma troca sozinho a ação
+  // padrão pra SetNull ao tornar a FK anulável — trocaria o comportamento
+  // que já existia (Party nunca tinha DELETE liberado de verdade, D-017
+  // não faz hard delete de cadastro; RESTRICT preserva a garantia caso
+  // algo tente apagar uma Party com endereço vinculado).
+  party              Party?        @relation(fields: [partyId], references: [id], onDelete: Restrict)
   logradouro         String
   numero             String?
   complemento        String?
@@ -425,9 +449,11 @@ model Address {
   municipio          String
   uf                 String        @db.Char(2)
   cep                String        @db.VarChar(8)
+  businessHours      String?
   createdAt          DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
-  tripsAsDestination Trip[]
+  tripsAsOrigin      Trip[]        @relation("TripOriginAddress")
+  tripsAsDestination Trip[]        @relation("TripDestinationAddress")
   pickupOrders       PickupOrder[]
 
   @@index([tenantId, partyId])
@@ -1178,13 +1204,13 @@ model RiskClearance {
 // movimento nunca se apaga — "cancelada" é estado (status), não remoção
 // (D-017, mesmo critério de Quote/Order/FreightRate).
 model Trip {
-  id                   String         @id @db.Uuid
-  tenantId             String         @db.Uuid
-  tenant               Tenant         @relation(fields: [tenantId], references: [id])
-  branchId             String         @db.Uuid
-  branch               Branch         @relation(fields: [branchId], references: [id])
-  orderId              String         @db.Uuid
-  order                Order          @relation(fields: [orderId], references: [id])
+  id                     String         @id @db.Uuid
+  tenantId               String         @db.Uuid
+  tenant                 Tenant         @relation(fields: [tenantId], references: [id])
+  branchId               String         @db.Uuid
+  branch                 Branch         @relation(fields: [branchId], references: [id])
+  orderId                String         @db.Uuid
+  order                  Order          @relation(fields: [orderId], references: [id])
   // Ordem da perna dentro do pedido — transbordo é real (sócio, campo:
   // ~1 em 8 viagens tem armazenagem/crossdocking intermediário antes do
   // destino final), então um Order pode ter mais de uma Trip em sequência.
@@ -1193,7 +1219,57 @@ model Trip {
   // D-015 — lá buraco exige inutilização junto à SEFAZ). Encadeamento de
   // endereço (destino da perna N = origem da perna N+1) é regra de
   // aplicação, não constraint — pode haver exceção operacional.
-  sequence             Int
+  sequence               Int
+  // Origem da perna (unidade "datas na viagem"). Anulável pelo mesmo
+  // motivo de destinationAddressId (D-047): o pedido nasce incompleto, a
+  // operação preenche depois. Fecha uma lacuna estrutural que D-047 não
+  // via: hoje o destino da perna N é derivado do destino da N−1 (regra de
+  // aplicação, D-037), o que deixa a origem da PRIMEIRA perna sem existir
+  // em lugar nenhum. Com coluna própria, o encadeamento vira
+  // preenchimento (copiar destinationAddressId da perna anterior pra
+  // originAddressId da próxima), não derivação — e nenhuma Trip fica sem
+  // representar sua origem. Verificado nesta unidade: o encadeamento
+  // "destino da N = origem da N+1" não tinha nenhuma implementação de
+  // código até aqui (createOrderFromQuoteInTransaction, em
+  // quote.service.ts, cria as N Trip de uma Quote sem tocar em endereço
+  // nenhum — accept() sempre deixou os três nulos, D-047); a regra
+  // existia só como intenção registrada na D-037, nunca como derivação em
+  // runtime. Esta coluna não conflita com nada existente.
+  originAddressId        String?        @db.Uuid
+  origin                 Address?       @relation("TripOriginAddress", fields: [originAddressId], references: [id])
+  // Janela de tempo estruturada na origem — mesmo padrão exato da D-045
+  // (PickupOrder), replicado sem variação: TimeWindow de @mash/shared
+  // materializado em coluna, hora como texto "HH:mm" (não time nativo,
+  // exceção deliberada à D-016 pelo mesmo motivo da D-045 — hora de
+  // parede local, não instante), endsNextDay em vez de segunda data,
+  // precisão sempre derivada por precisionOf() (nunca gravada). As cinco
+  // invariantes de TimeWindow são impostas por CHECK no banco (migração
+  // desta unidade), mesmo critério do TaxRate (D-043)/PickupOrder (D-045):
+  // a garantia mora onde o dado é escrito.
+  //
+  // Justificativa de negócio (sócio): crossdocking sempre tem agendamento
+  // marcado numa janela próxima de atendimento — cada chegada no crossdock
+  // é um agendamento próprio, caminhão que entrega e caminhão que coleta
+  // são veículos diferentes no mesmo endereço. Com janela nas duas pontas
+  // de CADA Trip, o transbordo (D-037) cai sozinho: o ponto do meio é
+  // destino da perna N e origem da perna N+1, e ganha janela de chegada
+  // (destinationX da perna N) e janela de saída (originX da perna N+1)
+  // sem nada especial construído pra transbordo.
+  originDate             DateTime?      @db.Date
+  originStartTime        String?        @db.VarChar(5)
+  originEndTime          String?        @db.VarChar(5)
+  originEndsNextDay      Boolean        @default(false)
+  originDayPeriodId      String?        @db.Uuid
+  originDayPeriod        DayPeriod?     @relation("TripOriginDayPeriod", fields: [originDayPeriodId], references: [id], onDelete: Restrict)
+  originTimeNote         String?
+  // Janela de tempo estruturada no destino — mesmo padrão, ver acima.
+  destinationDate        DateTime?      @db.Date
+  destinationStartTime   String?        @db.VarChar(5)
+  destinationEndTime     String?        @db.VarChar(5)
+  destinationEndsNextDay Boolean        @default(false)
+  destinationDayPeriodId String?        @db.Uuid
+  destinationDayPeriod   DayPeriod?     @relation("TripDestinationDayPeriod", fields: [destinationDayPeriodId], references: [id], onDelete: Restrict)
+  destinationTimeNote    String?
   // Preço unitário desta viagem (unidade "caminho CUSTO → Order") —
   // copiado de Quote.total no momento da criação (accept()), nunca
   // recalculado depois (D-014, mesmo critério de Order.rate/total).
@@ -1204,7 +1280,7 @@ model Trip {
   // coisa (RLS, sequence, status, PickupOrder...) sem contexto de
   // cotação nenhum — "preço" não é atributo universal de Trip, só das
   // que nascem de accept().
-  price                Decimal?       @db.Decimal(14, 2)
+  price                  Decimal?       @db.Decimal(14, 2)
   // Nuláveis (unidade "caminho CUSTO → Order", deliberado, não lacuna):
   // motorista, veículo e destino são preenchidos NA OPERAÇÃO, não na
   // cotação — accept() cria a Trip sem nenhum dos três. Mesmo motivo
@@ -1214,33 +1290,33 @@ model Trip {
   // CUSTO. Sem GRANT restrito aqui: Trip nunca teve REVOKE de UPDATE
   // (só DELETE, abaixo) — quando existir TripService, atribuir os três
   // depois já funciona com o GRANT default.
-  destinationAddressId String?        @db.Uuid
-  destinationAddress   Address?       @relation(fields: [destinationAddressId], references: [id])
-  driverId             String?        @db.Uuid
-  driver               Driver?        @relation(fields: [driverId], references: [id])
-  vehicleId            String?        @db.Uuid
-  vehicle              Vehicle?       @relation("TripVehicle", fields: [vehicleId], references: [id])
-  trailer1Id           String?        @db.Uuid
-  trailer1             Vehicle?       @relation("TripTrailer1", fields: [trailer1Id], references: [id])
-  trailer2Id           String?        @db.Uuid
-  trailer2             Vehicle?       @relation("TripTrailer2", fields: [trailer2Id], references: [id])
-  riskClearanceId      String?        @db.Uuid
-  riskClearance        RiskClearance? @relation(fields: [riskClearanceId], references: [id])
-  statusId             String         @db.Uuid
-  status               TripStatus     @relation(fields: [statusId], references: [id])
-  createdAt            DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime       @updatedAt @db.Timestamptz(3)
+  destinationAddressId   String?        @db.Uuid
+  destinationAddress     Address?       @relation("TripDestinationAddress", fields: [destinationAddressId], references: [id])
+  driverId               String?        @db.Uuid
+  driver                 Driver?        @relation(fields: [driverId], references: [id])
+  vehicleId              String?        @db.Uuid
+  vehicle                Vehicle?       @relation("TripVehicle", fields: [vehicleId], references: [id])
+  trailer1Id             String?        @db.Uuid
+  trailer1               Vehicle?       @relation("TripTrailer1", fields: [trailer1Id], references: [id])
+  trailer2Id             String?        @db.Uuid
+  trailer2               Vehicle?       @relation("TripTrailer2", fields: [trailer2Id], references: [id])
+  riskClearanceId        String?        @db.Uuid
+  riskClearance          RiskClearance? @relation(fields: [riskClearanceId], references: [id])
+  statusId               String         @db.Uuid
+  status                 TripStatus     @relation(fields: [statusId], references: [id])
+  createdAt              DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime       @updatedAt @db.Timestamptz(3)
   // Contratação de terceiro (D-019) — 1:1, só existe quando a viagem é
   // terceirizada. FK vive em CarrierHire (dependente carrega a
   // referência), não aqui — mesmo critério de Address -> Party.
-  carrierHire          CarrierHire?
+  carrierHire            CarrierHire?
   // Eventos da viagem (D-018) — FK vive em Occurrence, não aqui, mesmo
   // critério de CarrierHire.
-  occurrences          Occurrence[]
+  occurrences            Occurrence[]
   // Ordem de coleta (D-027) — FK vive em PickupOrder, não aqui, mesmo
   // critério de CarrierHire/Occurrence. 1:N: uma Trip pode ter mais de
   // uma emissão ao longo do tempo (correção é emitir de novo, não editar).
-  pickupOrders         PickupOrder[]
+  pickupOrders           PickupOrder[]
 
   @@unique([orderId, sequence])
   @@index([tenantId, branchId])
@@ -1557,14 +1633,16 @@ model Occurrence {
 // completa, mesmo critério que já semeou só três OrderStatus e dois
 // TripStatus.
 model DayPeriod {
-  id           String        @id @db.Uuid
-  tenantId     String?       @db.Uuid
-  tenant       Tenant?       @relation(fields: [tenantId], references: [id])
-  code         String
-  name         String
-  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
-  pickupOrders PickupOrder[]
+  id                       String        @id @db.Uuid
+  tenantId                 String?       @db.Uuid
+  tenant                   Tenant?       @relation(fields: [tenantId], references: [id])
+  code                     String
+  name                     String
+  createdAt                DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime      @updatedAt @db.Timestamptz(3)
+  pickupOrders             PickupOrder[]
+  tripsAsOriginWindow      Trip[]        @relation("TripOriginDayPeriod")
+  tripsAsDestinationWindow Trip[]        @relation("TripDestinationDayPeriod")
 
   @@unique([tenantId, code])
 }

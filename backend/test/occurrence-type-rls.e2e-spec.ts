@@ -35,12 +35,16 @@ describe('OccurrenceType · RLS com padrão do sistema (D-020)', () => {
     await base.$disconnect();
   });
 
-  it('qualquer tenant enxerga os dois tipos padrão semeados na migração', async () => {
+  it('qualquer tenant enxerga os três tipos padrão semeados nas migrações', async () => {
     const types = await forTenant(tenantA.id).occurrenceType.findMany({
       where: { tenantId: null },
     });
 
-    expect(types.map((t) => t.code).sort()).toEqual(['COMMERCIAL_HOLD', 'DELAY']);
+    expect(types.map((t) => t.code).sort()).toEqual([
+      'COMMERCIAL_HOLD',
+      'DELAY',
+      'EMPTY_RETURN',
+    ]);
   });
 
   it('não enxerga tipo próprio de outro tenant', async () => {

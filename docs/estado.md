@@ -1315,3 +1315,125 @@ aqui explicitamente pra não confundir os dois.
 
 **Fora do escopo, não construído (como pedido):** gerenciar grupos e usuários, qualquer
 configuração além do prazo padrão de validade.
+
+## Unidade "datas na viagem" — origem e janela nas duas pontas da `Trip`
+
+**Por quê:** as três perguntas de negócio que bloqueavam isso (origem derivada sem existir
+em lugar nenhum pra primeira perna, formato de horário de funcionamento de `Address`,
+devolução de vazio como ocorrência ou entidade nova) foram respondidas com o sócio.
+`Trip` continuava sem nenhuma coluna de data — lacuna já registrada na D-047 como "última
+antes da primeira tela".
+
+**Investigado antes de modelar (como exigido):**
+- `Trip` hoje (`backend/prisma/schema.prisma:1180`): tinha `destinationAddressId` (anulável
+  desde D-047) e **nenhuma coluna de data**. `sequence` (D-037) é atribuído direto pela
+  aplicação em `quote.service.ts:302` (`for (let sequence = 1; sequence <= quote.quantity;
+  sequence += 1)`), sem `DocumentCounter` — não é numeração de negócio, é ordem interna.
+- **O encadeamento "destino da N = origem da N+1" (D-037) não tinha NENHUMA implementação
+  de código até esta unidade** — achado que não estava no pedido. O único lugar que cria
+  múltiplas `Trip` de uma vez (`createOrderFromQuoteInTransaction`,
+  `quote.service.ts:293-314`) cria uma `Trip` por unidade de `quote.quantity` (contêineres,
+  não pernas de transbordo) e nunca toca em endereço — as três (`destinationAddressId`/
+  `driverId`/`vehicleId`) sempre nascem nulas (D-047), preenchidas só na operação depois.
+  A regra de encadeamento existia apenas como intenção registrada na D-037, nunca como
+  derivação em runtime. **Conclusão: `Trip.originAddressId` não conflita com nada
+  existente** — não havia necessidade de parar (a condição que pediria isso, comentário 1
+  do pedido).
+- **`Address.partyId` já era `NOT NULL` desde a criação da tabela**
+  (`20260904070857_add_customer_address`, então `Customer`) — o pedido descrevia "Address
+  ganha dono" como se dono fosse novo; na verdade é o oposto: hoje TODO endereço já
+  pertence a uma `Party` (endereço do cadastro do cliente), e a mudança real foi
+  **remover** essa obrigatoriedade, não adicioná-la, pra permitir o endereço esporádico
+  sem dono. Único lugar do código que cria `Address` fora de teste
+  (`party.controller.ts:96-105`) sempre passa `partyId` — nenhum caminho de produção
+  dependia da obrigatoriedade pra funcionar, então relaxar não quebrou nada.
+- Padrão exato das cinco colunas de janela de `PickupOrder` (D-045,
+  `20260910000000_add_day_period_and_pickup_time_window`) conferido linha a linha antes de
+  replicar: hora como `VARCHAR(5)` texto (não `time` nativo), `endsNextDay` em vez de
+  segunda data, cinco `CHECK` com guarda explícita de `NULL` em cada comparação.
+- `OccurrenceType`: só `DELAY`/"Atraso" (público) e `COMMERCIAL_HOLD`/"Retenção comercial"
+  (interno) semeados (`20260907000258_add_occurrence`) — confirmado por leitura da
+  migração antes de escrever o `INSERT` novo.
+- **Achado que não estava no pedido:** `PickupOrder` já tem um campo `businessHours`
+  (texto livre, `20260907051937_add_pickup_order`) — não em `Address`, mas exatamente o
+  precedente de formato pra "horário de funcionamento" que o pedido pedia pra relatar.
+  Reaproveitado o mesmo formato (texto livre) em vez de inventar um novo — ver decisão
+  abaixo.
+
+**Pronto** (migração `20260912020000_trip_origin_and_time_windows`, `migrate diff
+--from-config-datasource --to-schema=prisma/schema.prisma --script` + edição à mão +
+`migrate deploy`, ambiente não interativo, mesmo fluxo da D-045):
+- `Address.partyId` virou anulável; FK manteve `ON DELETE RESTRICT` explícito no schema
+  (`onDelete: Restrict` — sem isso o Prisma troca sozinho pra `SET NULL` ao tornar a FK
+  opcional, o que mudaria comportamento: apagar uma `Party` referenciada por endereço
+  passaria de bloqueado para silenciosamente órfão). `Address.businessHours` (texto livre,
+  mesmo formato de `PickupOrder.businessHours`) — não reforçado por `CHECK`, convenção de
+  preenchimento (só faz sentido com `Party` dona), não invariante do banco.
+- `Trip.originAddressId` (anulável, FK `ON DELETE SET NULL`, mesmo tratamento de
+  `destinationAddressId`) + dez colunas de janela estruturada, cinco em `origin*` e cinco
+  em `destination*`, **formato IDÊNTICO à D-045** (`originDate`/`originStartTime`/
+  `originEndTime`/`originEndsNextDay`/`originDayPeriodId`/`originTimeNote`, espelhado em
+  `destination*`). Dez `CHECK` (cinco por ponta, mesma redação da D-045 com o prefixo
+  trocado), cada comparação com `NULL` guardada explicitamente. Precisão continua derivada
+  por `precisionOf()` (`@mash/shared`), nunca gravada — nenhuma coluna nova de precisão.
+- `OccurrenceType` ganhou `EMPTY_RETURN`/"Devolução de vazio" (`INSERT`, não migração de
+  tipo) — `isPublic = FALSE`, confirmado com o sócio depois do relato desta unidade:
+  devolução de vazio é operação interna entre transportadora e armador, o embarcador não
+  acompanha, e é onde o demurrage aparece — expor atraso de devolução ao cliente expõe um
+  custo que pode virar discussão comercial. Exposição é caminho sem volta (fechado agora
+  abre depois; aberto agora, alguém já viu), e o portal do embarcador é v1.1 de qualquer
+  forma (D-010/D-039). Corrigido depois do relato inicial (que tinha `isPublic = TRUE`,
+  suposição do agente não verificada) — migração já aplicada editada e `UPDATE` corretivo
+  rodado em `mash` (1 linha; `mash_test` já não tinha a linha por causa do `TRUNCATE
+  ... "Tenant" CASCADE`, ver abaixo), checksum em `_prisma_migrations` realinhado à mão
+  nos dois bancos (mesmo procedimento da D-038/D-047).
+- Nenhuma coluna de transbordo especial — o ponto do meio de um encadeamento (D-037) é só
+  destino da perna N e origem da perna N+1, cada `Trip` com sua própria janela.
+- `test/trip-time-window-check.e2e-spec.ts` (novo, 39 testes: 19 por ponta × 2 pontas,
+  parametrizado por `describe.each(['origin','destination'])` em vez de arquivo duplicado
+  — a regra é idêntica dos dois lados — mais 1 teste de transbordo) — os dez `CHECK`
+  barrados por fora do serviço (Prisma admin direto), mesmo critério da D-045, e a prova
+  de crossdock pedida: duas `Trip` encadeadas compartilhando o mesmo `Address` (destino da
+  perna 1 = origem da perna 2), com janela de chegada (`destinationStartTime`/`EndTime` da
+  perna 1) e de saída (`originStartTime`/`EndTime` da perna 2) diferentes, sem nenhuma
+  coluna ou lógica específica de transbordo.
+- `test/address-owner.e2e-spec.ts` (novo, 4 testes) — endereço sem dono aceito (`partyId`
+  nulo), endereço com dono carrega `Party` identificável (não texto livre), `partyId`
+  inexistente recusado pela FK, `businessHours` persiste mesmo sem dono.
+- `test/helpers/seed-occurrence-types.ts` ganhou `EMPTY_RETURN` na lista reseeded (mesmo
+  problema já documentado na D-045 pro `DayPeriod`: `TRUNCATE ... "Tenant" CASCADE` varre
+  as linhas com `tenantId IS NULL` da migração — confirmado batendo o `SELECT` direto:
+  `mash` tinha a linha logo após o `migrate deploy`, `mash_test` já estava sem ela depois
+  da suíte e2e rodar uma vez, porque nenhum helper resemeava). `occurrence-type-rls.
+  e2e-spec.ts` atualizado de `['COMMERCIAL_HOLD','DELAY']` pra incluir `EMPTY_RETURN`.
+- Suítes: `shared` **139** (inalterado, nenhum código de `@mash/shared` tocado), `backend`
+  27 unit + **443** e2e = **470** (427→470: +43 — 39 em `trip-time-window-check` + 4 em
+  `address-owner`), `frontend` 6 (inalterado, unidade é só backend). Build e lint
+  (`oxlint`) limpos. Migração aplicada em `mash` e `mash_test` (`npm run db:test:setup`
+  depois do `migrate deploy` — sem isso a suíte e2e falha com "column Address.businessHours
+  does not exist", achado durante esta unidade, mesmo padrão já visto na D-053).
+
+**Decisões tomadas que não estavam no pedido:**
+- `Address.party` com `onDelete: Restrict` explícito no schema — sem isso o Prisma
+  trocaria sozinho pra `SET NULL` (comportamento novo, não pedido) só porque a FK virou
+  anulável; mantido o comportamento que já existia.
+- `businessHours` como texto livre em `Address`, mesmo formato de
+  `PickupOrder.businessHours` já existente — o pedido pedia pra "relatar o formato
+  escolhido e por quê"; a resposta é que o formato já tinha precedente no próprio repo
+  (CLAUDE.md 3.1, antirredundância) e a mesma justificativa da D-034 se aplica (seção
+  1.6 — formato varia demais entre terminais/portos pra fixar regra).
+- `describe.each` parametrizando os testes de `origin`/`destination` em vez de duplicar o
+  arquivo da D-045 — as duas pontas têm exatamente a mesma regra; duplicar por cópia
+  violaria antirredundância (CLAUDE.md 3.1) sem ganhar nada em clareza.
+
+**Não verificado:**
+- `prisma migrate reset --force` (provaria a migração aplicando limpa contra banco vazio,
+  do zero, mesmo critério da D-045) — não executado nesta sessão, exige consentimento
+  explícito do usuário a cada execução (CLAUDE.md seção 2). Migração verificada por
+  `migrate deploy` incremental em `mash` e `mash_test`, não por reset.
+
+**Fora do escopo, não construído (como pedido):** descer a janela de coleta de
+`PickupOrder` pra `Trip`, lista por processo, free time e demurrage, qualquer tela, e o
+que a própria unidade descartou deliberadamente — validação de janela contra
+`Address.businessHours`, hierarquia de terminal/sub-terminal, qualquer coisa específica de
+transbordo (o teste de crossdock prova que não precisa de nada específico).
