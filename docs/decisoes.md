@@ -2810,6 +2810,835 @@ sem tela é código não exercitado que parece pronto.
   duas pessoas; dois operadores editando a mesma cotação ao mesmo tempo ainda não é cenário
   real. Fica como pendência, não como construção.
 
+## D-049 · A casca do frontend e a autenticação por sessão opaca
+
+**Status:** Fechada · as duas confirmações pendentes foram feitas na D-050
+
+**Por quê:** o projeto tinha backend completo em cadastro, comercial, operação, terceiros e
+financeiro, e zero tela. Esta é a primeira linha de frontend, e a primeira vez que se
+escolhe convenção de frontend — por isso a unidade é de casca, não de tela: o esqueleto que
+a cotação vai habitar.
+
+Commit `96c2f28`, 61 arquivos.
+
+### A autenticação teve que ser construída no meio, e isso é o mais importante aqui
+
+A investigação prévia encontrou o backend usando **JWT no cabeçalho**, não o cookie com
+sessão opaca que a D-048 já tinha decidido. Construir o frontend contra o que existia seria
+retrabalho garantido, então a autenticação foi refeita dentro desta unidade: tabela
+`Session`, login e logout por cookie, `GET /me`, CSRF por validação de `Origin`.
+
+**Registro honesto de processo:** isso é decisão de camada 1 tomada de passagem, com o
+crédito da sessão acabando. Foi a escolha certa — a D-048 já tinha decidido o destino, e o
+backend é que estava divergente — mas merece releitura com calma, porque sessão é onde o
+RLS se apoia.
+
+**Sessão opaca em tabela, não JWT**, pelo motivo da D-048: derrubar na hora a sessão de um
+operador desligado. Com JWT só expirando, não dá.
+
+**O `tenantId` sai da sessão autenticada, nunca do subdomínio** (D-029/D-048). Verificado
+na tela: o cabeçalho mostra tenant e usuário juntos ("Smoke Test · Smoke User") — o RLS
+visível na interface, vindo da sessão.
+
+### Verificação no navegador, além dos testes
+
+O cookie foi conferido no DevTools, não só em teste: `HttpOnly` ✓, `Secure` ✓,
+`SameSite=Lax`, domínio `localhost` **sem domínio pai**. A ausência de `Domain` era o risco
+específico que a D-048 apontou — com domínio pai, a sessão vazaria entre tenants.
+
+Login conferido também por `curl` com Origin e cookie jar: CORS correto, corpo da resposta
+vazio, **o token nunca aparece para o cliente**.
+
+`@mash/shared` chega ao navegador: `time-window.parser.js`, `quote-validity.expiration.js`
+e `quote-pricing-calculator.js` carregam no cliente. A decisão da D-048 — mesma função pura
+nas duas pontas, frontend para o preview ao vivo, backend para o valor oficial — está
+funcionando de ponta a ponta. Não era garantido; podia ter quebrado na resolução do
+workspace.
+
+### Dois layouts, e o login otimizado para teclado
+
+**Layout de aplicação** (sidebar, cabeçalho, conteúdo) e **layout de autenticação** (sem
+sidebar, sem `Ctrl+K`, formulário pequeno e centrado) são rotas separadas. Isso decide a
+estrutura de rotas desde o primeiro arquivo e é caro de refazer depois.
+
+**Alternativa recusada: login como página cheia com arte ou gradiente.** É o padrão visual
+corrente e fica bem em captura de tela. O operador loga uma vez por dia e quer sair dali em
+três segundos: foco automático no primeiro campo, `Enter` avança, `Enter` no último envia,
+gerenciador de senha do navegador funcionando. O ganho de um login bonito é zero depois da
+segunda semana; o custo de um login que exige mouse é diário. Coerente com a D-022 —
+teclado é aritmética, não estética.
+
+Fora do escopo por decisão: "lembrar de mim" e recuperação de senha.
+
+### Esqueleto é a regra padrão do app inteiro
+
+Enquanto `/me` não responde, a casca **já aparece desenhada**, com blocos no formato do
+conteúdo que está vindo. Nunca tela branca; nunca renderizar conteúdo e depois jogar para o
+login.
+
+**Alternativas recusadas:** esperar em branco (parece lento mesmo sendo rápido) e renderizar
+antes de saber (o operador vê dado por um instante e some, o que parece defeito).
+
+**Isto não é comportamento da abertura — é o padrão de toda tela que buscar dado.** A lista
+por processo carrega mostrando linhas no formato certo. Decidido aqui porque, se nascer
+errado na casca, nasce errado em todo lugar.
+
+**Nada que já apareceu pode se mover depois.** Espaço reservado desde o começo: conteúdo que
+empurra o resto para baixo faz o operador clicar no lugar errado, e é o defeito que mais
+irrita quem usa o sistema o dia inteiro.
+
+Verificado no navegador com rede limitada: a casca aparece desenhada com o conteúdo ainda
+pendente. *(O número de 10,44 s e 10,8 MB observado no teste é o Vite em desenvolvimento
+servindo cada arquivo separado, sem empacotar — não diz nada sobre a experiência real.
+O que importava era o comportamento, e ele estava certo.)*
+
+### O resto da casca
+
+- **Cliente HTTP num módulo só:** `fetch` puro, sem axios — anexa credencial, trata 401,
+  normaliza erro.
+- **Estado de filtro, busca e página vive na URL**, não em estado local. O operador copia o
+  link e manda para o colega, abre duas abas comparando, volta no histórico e cai onde
+  estava. É o que a planilha não faz, e é a vantagem real de ser web.
+- **Tokens de densidade em variável CSS** (D-022), o mínimo: altura de linha de tabela,
+  espaçamento base, fonte de tabela, fonte de formulário. Alvo 1366×768 e 1920×1080 a 125%.
+- **`Ctrl+K` nasce só com navegação entre telas.** Busca de entidade (número de cotação,
+  CNPJ, placa, motorista) entra junto do endpoint de busca, seguindo "o endpoint nasce com
+  a tela" (D-048).
+- **Números:** `tabular-nums`, alinhamento à direita, `Intl.NumberFormat('pt-BR')`.
+- Código em inglês (D-007), rótulo em português (D-008), **sem biblioteca de i18n** — é um
+  idioma só.
+
+### Recusado nesta unidade
+
+- **Componente genérico de formulário** (campo de moeda, combobox de cliente, modal de
+  cadastro rápido) — a D-048 recusou construir genérico antes de dois usos reais, e é assim
+  que se acerta o genérico errado.
+- **Modo escuro** — a D-022 reservou o assento com variável CSS, e reservado é como deve
+  ficar. Dois temas antes de existir uma tela dobra o trabalho de cada ajuste de densidade.
+
+### Verificação
+
+`shared` 85 (inalterado), backend 330 → **334** (a migração de `Session` mais os testes de
+autenticação novos/reescritos), frontend **6** (vitest + testing-library, o mínimo: login
+envia, 401 redireciona). Build e lint limpos nos três workspaces, na ordem
+`shared`→`backend`→`frontend`.
+
+### Confirmado depois, na D-050
+
+O relatório desta unidade foi interrompido por limite de sessão antes de nomear duas escolhas
+que o texto mandava relatar. Confirmadas na investigação que abriu a D-050:
+
+- **Roteador: TanStack Router** (`frontend/src/router.tsx`), com comentário no código
+  explicando a escolha sobre o React Router.
+- **Formato de erro:** o cliente HTTP normaliza em
+  `{ kind:'validation', fieldErrors, formErrors }` ou `{ kind:'http', status, message }`.
+  O backend produz o primeiro com `BadRequestException(zod.flatten())` — padrão do
+  `AuthController.login`, hoje repetido endpoint a endpoint porque **não existe exception
+  filter global** (pendência registrada na D-050).
+
+## D-050 · Primeira tela de negócio: cotação por custo (parte 1 — montar e ver o preço)
+
+**Status:** Fechada · parte 2 pendente (fechar, aceitar, recusar, criar cliente no fluxo) ·
+banco de teste compartilhado com o de desenvolvimento é risco operacional confirmado
+(pendência)
+
+**Por quê:** a D-048 decidiu que esta é a primeira tela, e o motivo não é que a cotação seja
+o passo mais importante do processo — é que **a cotação é onde o dado entra no mundo pela
+primeira vez**. O operador digita contêiner, peso, rota e preço no corpo de um e-mail, e
+depois digita tudo de novo na planilha. O Mash não ganha fazendo grade mais rápida; ganha
+eliminando a segunda digitação.
+
+E é a tela que testa a hipótese do produto: o operador calcula na hora, milhares de vezes
+por ano. Se a calculadora na tela não for mais rápida que a calculadora de mão dele, isso
+precisa aparecer agora.
+
+Escopo desta parte: montar a cotação, ver o preço recalculando ao vivo, salvar rascunho.
+
+### O bloqueio que a investigação revelou
+
+`calculateQuotePricing` recebe as alíquotas **como entrada** — e o `TaxRateService` não
+tinha rota HTTP nenhuma, era chamado só por dentro, pelo `close()`. Sem alíquota chegando ao
+navegador, não existe preview ao vivo. A unidade ganhou um endpoint que não estava previsto:
+
+`GET /tax-rates/quote-preview?icmsUf=UF`, reaproveitando `findRate()` sem tocar na lógica de
+vigência (D-043). A busca continua sendo do serviço; a rota só expõe.
+
+**A guarda de placeholder é respeitada e propagada:** fora de dev/test o serviço recusa as
+27 alíquotas internas ainda não calibradas, e a rota devolve **422 com a mensagem real** —
+sem isso o Nest devolveria "Internal server error" sem motivo. A tela mostra o porquê e não
+calcula. **Nunca zero, nunca alíquota inventada.**
+
+`findInterstateIcmsRate()` não entra neste caminho: `Quote` tem um campo `icmsUf`, não
+origem e destino.
+
+### O rascunho guarda as entradas, não o preço
+
+`POST /quotes/cost-based` cria a cotação `OPEN` com as **linhas de custo e a margem**. Quem
+calcula e congela preço e alíquotas é `close()` (D-041/D-046), que é a parte 2.
+
+**Correção de instrução:** o texto da unidade dizia "o backend sempre recalcula ao salvar".
+Está errado para rascunho — rascunho não tem preço para recalcular. A regra da D-048 ("o
+backend nunca confia no valor que veio do cliente") continua valendo e se aplica no
+fechamento, que é onde o número passa a valer.
+
+**Consequência a registrar, não a corrigir:** a rota de preview usa "agora" como data de
+vigência. Se o operador abrir o rascunho hoje e fechar semana que vem, atravessando mudança
+de alíquota, o preço que ele viu não é o que vai valer. É o comportamento correto da D-043 —
+está escrito aqui para ninguém tratar como bug depois.
+
+`createCostBased()` já aceitava margem desde a D-041. Nenhuma mudança no serviço.
+
+### A tela
+
+Linhas de custo por `QuoteCostType` **lido do banco** (tabela de domínio, D-020 — custo novo
+é `INSERT`, e a tela acompanha sem alteração). Margem e preço final **ambos editáveis, um
+recalculando o outro**, com o **preço como protagonista visual**: o operador pensa em preço,
+a margem é consequência — validado com o sócio (D-048).
+
+Soma dos custos, imposto, margem e preço final aparecem a cada tecla, usando o `breakdown[]`
+que a função já devolve. **Sem botão de calcular.**
+
+Margem **por dentro**, confirmada com o sócio pelo número e não pela definição: custo 2.400
+e preço 3.000 são 20% de margem (600 ÷ 3.000), não 25% de markup (600 ÷ 2.400). O sócio usa
+markup só como métrica de marcação. `QuotePricingCalculator` já aplicava assim por analogia
+com a fórmula do ICMS — faltava a confirmação de campo, e ela fecha a pendência mais antiga
+do bloco comercial sem nenhuma mudança de código.
+
+**Schema de contrato em `@mash/shared`, schema de formulário derivado** por
+`.extend()`/`.pipe()`, nunca duplicado (D-048). Na tela o valor chega como `"2.800,00"` em
+string com máscara; no contrato é `Decimal`.
+
+**Erro no campo**, não em caixa no topo: o cliente HTTP da casca já normaliza
+`{ fieldErrors, formErrors }` e o endpoint novo repete o padrão de
+`BadRequestException(zod.flatten())` do login.
+
+**Cabe em 1366×768 sem rolar**, confirmado com três linhas de custo — a grade de linhas tem
+rolagem própria e absorve o crescimento, em vez de empurrar a página.
+
+**Alternativa recusada: construir exception filter global.** Existiria motivo — não há
+nenhum hoje —, mas mudaria o formato de erro de tudo que já tem teste. Repetir o padrão do
+login custa menos e não mexe em 343 testes. Fica como pendência.
+
+### Verificação
+
+`shared` 85 → 96, backend 334 → 343 (14 unitários + 329 e2e), frontend 6 (sem teste novo —
+verificação manual no navegador, como pedido). Build e lint limpos nos três workspaces.
+
+**Bug real encontrado no navegador, não nos testes:** `description.optional()` rejeitava
+string vazia, porque campo HTML vazio manda `""` e não `undefined`. Corrigido no schema
+compartilhado. É o tipo de defeito que só aparece com uma pessoa digitando.
+
+### Dois achados de ambiente
+
+**A suíte e2e roda contra o mesmo Postgres de desenvolvimento** e faz
+`TRUNCATE Tenant CASCADE` em vários arquivos, apagando o tenant semeado e as tabelas de
+domínio. O ambiente de trabalho foi perdido **duas vezes numa sessão**, exigindo semear à
+mão para continuar testando.
+
+Isto já tinha aparecido na D-045, onde o sintoma foi `DayPeriod` sendo esvaziada inclusive
+nas linhas com `tenantId IS NULL` — comportamento correto do Postgres, registrado na época
+como nota. Agora custou tempo de trabalho real, e vai custar toda vez que a tela for testada
+à mão. **Banco separado para teste.** Vira pendência.
+
+**`NODE_ENV` vazio exportado no shell vence o `.env`** (o dotenv não sobrescreve variável já
+definida), e com isso o `TaxRateService` recusa a alíquota placeholder mesmo em
+desenvolvimento. A guarda funcionou — recusar é o comportamento certo. Mas mostra que o
+ambiente pode ser diferente do que o arquivo diz: item para o `deploy-checklist.md`,
+confirmar `NODE_ENV` explícito em produção e não herdado.
+
+**Resolvido depois:** banco `mash_test` separado, no mesmo cluster e com as mesmas roles —
+`npm run db:test:setup` cria e aplica as migrações, então os `GRANT`s e o RLS saem idênticos
+aos de desenvolvimento (confirmado comparando `information_schema`: 44 grants de coluna em
+`Quote`, iguais). Isso importa mais que o isolamento em si: com `GRANT` divergente, os testes
+que provam garantia de banco por fora do serviço (D-041, D-046, D-047) continuariam verdes
+provando nada.
+
+A suíte e2e lê `.env.test` e **recusa rodar** se ele não existir ou se apontar pra mesma URL
+do `.env` de desenvolvimento — as duas guardas testadas por execução, e nenhuma delas depende
+de `NODE_ENV` (que nesta máquina é vencido pelo shell). Limite conhecido: mesmo cluster, logo
+a proteção é a guarda, não isolamento físico.
+
+## D-051 · Cotação por custo, parte 2: fechar, aceitar e recusar na tela
+
+**Status:** Fechada · a cotação está completa de ponta a ponta · criar cliente no fluxo
+continua pendente, e é o que trava o uso real (ver fim)
+
+**Por quê:** a D-050 deixou a cotação sabendo montar e calcular, mas não sabendo terminar.
+Esta unidade fecha o ciclo que a D-046 e a D-047 já tinham modelado no backend: fechar com
+prazo, aceitar criando o pedido, recusar.
+
+É a primeira coisa no projeto que um operador percorreria do começo ao fim.
+
+### Os quatro `OrderParties`: o operador escolhe no aceite
+
+`accept(quoteId, orderInput)` exige filial, remetente, destinatário e tomador, e a `Quote`
+não guarda nenhum dos quatro (pendência da D-047). A saída não é a cotação passar a
+guardá-los — **é o operador escolher no momento do aceite.**
+
+Isso não é contorno, é o que a D-047 já tinha decidido: remetente, destinatário e tomador só
+se conhecem quando a operação se monta. No e-mail real que motivou a sessão, a Águia
+Translog pede a cotação, mas o embarque é da Movecta.
+
+`GET /parties` e `GET /branches`, leitura mínima, mesmo padrão de `GET /quote-cost-types`.
+**Sem paginação e sem busca no servidor**, mas com formato de resposta que comporta
+paginação depois sem virar mudança de contrato. Busca por digitação filtra no cliente a
+lista já carregada — com o volume atual basta, e não antecipa endpoint de busca.
+
+**A pendência do vínculo com cliente (D-047) NÃO foi resolvida por isto e continua aberta.**
+Ela bloqueia lista de cotações e follow-up de expirada, não o aceite.
+
+### Cinco estados, dois gravados, um derivado
+
+Rascunho · Fechada (válida até DD/MM) · **Fechada e vencida** · Aceita · Recusada.
+
+A expiração é derivada na tela — preço fechado, sem desfecho, `validUntil` passado (D-046).
+Nenhum status gravado, nenhum job periódico. Os cinco foram conferidos visualmente,
+inclusive o vencido, movendo `validUntil` para o passado.
+
+Cada estado tem ação diferente, e fechar e aceitar são irreversíveis: **confirmação em duas
+etapas**, nunca disparo por `Enter` (D-022 pede teclado, não gatilho acidental).
+
+### Prazo: a tela sempre manda, mesmo o serviço aceitando ausência
+
+`close()` recebe o prazo opcional por compatibilidade com os testes da D-041/D-043, e
+cotação sem prazo nunca expira — **o padrão inseguro é o silencioso** (pendência registrada
+na D-046). A tela fecha esse buraco tornando o prazo obrigatório na interface.
+
+A data é calculada por `computeQuoteValidUntil` de `@mash/shared` e **guardada como data,
+nunca como prazo** (D-046). Em meses, o dia que não existe no mês de destino gruda no último
+dia.
+
+### 409 e 422 são coisas diferentes — correção do que eu tinha pedido
+
+O texto da unidade mandava responder 409 para toda segunda tentativa de desfecho. Está
+incompleto, e a execução separou melhor:
+
+- **409** quando a cotação já está `ACCEPTED` — é duplo clique, idempotência real. A tela
+  mostra "já aceita", não erro.
+- **422** quando já está `REJECTED` — tentar aceitar uma recusada não é repetição, é erro de
+  negócio.
+
+A distinção importa porque a reação certa é oposta: uma é "calma, já deu certo", a outra é
+"isso não pode". Resolvido com uma leitura extra dentro do `catch`, sem tocar no serviço.
+
+### Verificação
+
+`shared` 96 → 104, backend 343 → **358** (14 unitários + 344 e2e), frontend 6 (verificação
+manual). Cabe em 1366×768 sem rolar **nos cinco estados**.
+
+No navegador, sem mouse: cotação montada, fechada com prazo de 3 dias, aceita — pedido
+nascido com número 1, 1 viagem, R$ 1.434,72. Segundo aceite recusado, **nenhum segundo
+pedido no banco**.
+
+O aceite também navega para a cotação salva em vez de limpar o formulário, mudança pequena
+na tela da parte 1 que fecha o fluxo.
+
+### Achado que confirma a urgência da separação de banco
+
+`OrderStatus` e `TripStatus` estavam **vazios no banco de desenvolvimento** — apagados pela
+suíte e2e antes da separação feita na D-050. Isso bloqueava o `accept()` de verdade, não só
+em teste, e ninguém tinha percebido até uma tela precisar.
+
+É a prova de que o problema registrado na D-045 e confirmado na D-050 já vinha causando dano
+silencioso. A separação chegou na hora. Semente restaurada.
+
+### O que trava o uso real agora
+
+**Nenhum tenant tem `Party` cadastrada**, porque não existe tela de cadastro. A tela de
+aceite mostra "Nenhuma parte cadastrada" — verdade do produto, não defeito, e a execução
+acertou em exibir em vez de esconder.
+
+Então a cotação funciona ponta a ponta, mas o aceite só completa com cadastro semeado à mão.
+**Criar cliente sem sair do fluxo** (D-048: "cadastro não é tela — é modal dentro do fluxo,
+com CNPJ preenchendo razão social e endereço) é a próxima coisa que decide se o operador
+consegue usar isto.
+
+## D-052 · Cadastro não é tela: criar cliente de dentro do fluxo da cotação
+
+**Status:** Fechada · tela de cadastro completa continua pendente (esta unidade cria com o
+mínimo; corrigir e completar não tem onde acontecer ainda)
+
+**Por quê:** a D-051 deixou a cotação completa de ponta a ponta, mas o aceite mostrava
+"Nenhuma parte cadastrada" — nenhum tenant tinha `Party`, porque não existia tela de
+cadastro. O fluxo funcionava só com dado semeado à mão.
+
+A D-048 já tinha decidido a forma: **cadastro não é tela, é modal dentro do fluxo.** O
+operador está na cotação, digita o cliente, o cliente não existe, cria ali sem sair. É o que
+ataca o teste de aceitação mais do que qualquer atalho — o concorrente é o e-mail que o
+operador escreve hoje, não outro TMS.
+
+### A consulta de CNPJ é auxílio, nunca requisito
+
+`CnpjLookupService` consulta a BrasilAPI **pelo backend**, com tempo limite de 5s, e **nunca
+lança**: 404 vira "não encontrado", qualquer outra falha vira mensagem explícita com
+`found: false`. O operador preenche à mão e segue.
+
+Isto não é hipótese testada em laboratório: **durante a verificação a BrasilAPI falhou de
+verdade duas vezes** (403 e depois 429), e nas duas a criação seguiu normalmente. A
+dependência externa está fora do caminho crítico do operador, provado por acidente real.
+
+O CNPJ é validado localmente antes de consultar — validador mod-11 com rejeição de dígito
+repetido, criado em `@mash/shared` (D-048 manda validadores brasileiros pra lá), porque não
+existia no repositório.
+
+**Endereço é tudo-ou-nada:** ou vem inteiro da consulta, ou não vem. Nunca formulário
+manual, nunca parcial. Endereço meio preenchido é pior que endereço nenhum, porque parece
+confiável. O backend tem `retry` sem endereço quando o parcial é descartado — descartar
+nunca bloqueia a criação.
+
+### O mínimo para criar é CNPJ e razão social
+
+Só o que o operador tem como saber agora. **Alternativa recusada: pedir tudo que a `Party`
+suporta** — isso transformaria o modal na tela de cadastro que a D-048 decidiu não fazer, e
+faria o operador parar a cotação para preencher dado que ele não tem na mão.
+
+A contrapartida é explícita: **a parte nasce incompleta, e a tela de cadastro completa —
+que ainda não existe — é o lugar de corrigir e completar.** Construir só o modal deixaria
+dado incompleto sem dono; por isso a tela entra logo depois, não como refinamento.
+
+### Duplicidade pelo banco, não por checagem prévia
+
+CNPJ repetido no mesmo tenant é detectado por **`P2002` do Prisma dentro da transação**, não
+por consulta antes do `INSERT`.
+
+**Alternativa recusada: checar e depois inserir.** É corrida clássica — dois cliques quase
+simultâneos passam os dois pela checagem. Deixar o banco recusar e tratar o erro é a única
+versão sem janela.
+
+A resposta é 409 **com a parte existente junto**, e o modal oferece "Usar {nome}",
+selecionando a que já existe. Recusar sem saída obrigaria o operador a abandonar o fluxo
+para descobrir o que já estava lá.
+
+### O que sustenta o "sem sair do fluxo"
+
+- O modal abre de dentro do seletor, quando o operador digita algo que não existe.
+- **O estado da cotação não se perde** — nem ao criar, nem ao fechar com `Esc`. Se perdesse,
+  a unidade teria falhado no seu próprio propósito.
+- A parte nova já vem selecionada no seletor que abriu o modal.
+- Tudo por teclado (D-022): abrir, preencher, criar, voltar.
+
+`EntityCombobox` próprio em vez de adicionar `@radix-ui/react-popover`, e `Dialog` genérico
+sobre Radix como base dos dois modais. O foco precisou de `setTimeout` por corrida com a
+restauração automática de foco do Radix — registrado por ser o tipo de detalhe que volta a
+morder quando alguém mexer no modal.
+
+`ApiError` ganhou `body?: unknown` para o modal ler `existingParty` do 409.
+
+Mesmo tratamento para `Branch`, que é estrutura própria e pede só nome.
+
+### Verificação
+
+`shared` 104 → **120**, backend 358 → **377** (20 unitários + 357 e2e), frontend 6
+(verificação manual). Builds e lint limpos.
+
+**Teste de aceitação, no cenário honesto:** tenant novo, nenhuma `Party` semeada, sem mouse.
+Cotação montada, fechada com prazo, duas partes e uma filial criadas pelos modais — com a
+BrasilAPI falhando de verdade no meio — e o pedido nasceu (número 1, 1 viagem, preço
+unitário confirmado). `Esc` no modal não perdeu o aceite nem criou nada. Duplicidade de CNPJ
+com "Usar {nome}" percorrida de ponta a ponta. Cabe em 1366×768 com o modal aberto.
+
+Banco de desenvolvimento confirmado intacto depois da suíte e2e contra `mash_test` — a
+verificação que a D-051 mostrou ser necessária, agora rotina.
+
+### Nota de processo
+
+O relatório da execução afirmou que "nenhuma decisão precisou entrar em `decisoes.md` por
+instrução explícita". A instrução era para o agente **não editar o arquivo**, não para as
+decisões deixarem de existir — sete escolhas de arquitetura foram tomadas nesta unidade e
+estão registradas aqui. A separação continua a mesma: o agente relata, a decisão é escrita
+fora da execução.
+
+## D-053 · A cotação guarda quem pediu, e só isso
+
+**Status:** Fechada · destrava a lista de cotações e o follow-up de expirada (próxima
+unidade)
+
+**Por quê:** a `Quote` não tinha vínculo nenhum com parte — pendência aberta desde a D-047.
+Isso não bloqueava o aceite (a D-051 resolveu deixando o operador escolher as partes no
+momento da operação), mas bloqueava duas coisas maiores: **achar a cotação depois** e
+**saber para quem ligar quando o prazo está vencendo**.
+
+A segunda derruba metade do que a D-046 construiu: separar expirada de recusada existe para
+o follow-up acontecer, e sem saber de quem é a cotação, a métrica existe e é inútil.
+
+### Um campo só, e o motivo de não serem quatro
+
+`Quote.partyId`, `NOT NULL`, FK para `Party`. **Quem pediu a cotação.**
+
+**Alternativa recusada: a cotação guardar também tomador, remetente e destinatário.** Quem
+paga só se sabe quando a operação se monta — pode ser o próprio, um parceiro, um agente de
+comex. No e-mail real que motivou a sessão, a Águia Translog pede e a Movecta embarca. Isso
+continua entrando no aceite, como a D-047 decidiu.
+
+O que a cotação sabe com certeza é quem pediu, porque é com essa pessoa que o operador está
+trocando e-mail. E é esse o dado que serve para achar e para cobrar resposta.
+
+**Não entra no `GRANT` restrito de `close()`:** o cliente não forma o preço, então não há o
+que congelar. Só preço, alíquotas e `validUntil` continuam congelados (D-043/D-046).
+
+**Nome `partyId`, não `customerId`**, seguindo o precedente de `FreightRate.partyId`.
+
+**No caminho TABELA, deriva de `freightRate.partyId`** em vez de ganhar parâmetro novo — a
+tarifa já é negociada com uma parte só, e pedir de novo seria redundante. Nenhum teste do
+caminho TABELA precisou mudar.
+
+`@@index([tenantId, partyId])` já na mesma migração: a lista que esta unidade destrava vai
+filtrar por cliente, e o índice custa zero agora.
+
+### `NOT NULL` direto, sem backfill — e por que a execução parou antes
+
+Havia 5 `Quote` no banco de desenvolvimento, todas do caminho CUSTO, dos tenants de
+verificação das D-050 e D-052. Três opções foram levantadas; a execução parou e perguntou
+antes de escolher.
+
+**Recusada: backfill usando `Order.tomadorId` como aproximação de quem pediu.** É exatamente
+a fusão de conceitos que esta decisão existe para impedir, e plantaria dado errado no dia um
+— num campo que nasce justamente para ser confiável.
+
+**Recusada: coluna anulável por enquanto.** O contrato de criação já exige o campo, então a
+coluna anulável só criaria um estado que não pode mais surgir.
+
+**Escolhida: apagar as 5.** São dado de smoke-test, não negócio. A migração aplica `NOT
+NULL` direto, sem backfill e sem default, e roda em produção contra banco vazio — nenhuma
+`Quote` real existe em lugar nenhum. Comentado na própria migração para quem ler daqui a um
+ano.
+
+O apagamento foi por SQL direto, **não** por `prisma migrate reset` — o `CLAUDE.md` exige
+consentimento explícito para isso e ele não foi dado.
+
+### Verificação
+
+`shared` 120 → **122**, backend **377** (20 unitários + 357 e2e, contagem inalterada),
+frontend 6. Nenhum teste novo no backend: ~15 pontos de fiação em 7 arquivos e2e, onde cada
+`Quote` de teste ganhou uma `Party`. **Nenhuma asserção mudou.**
+
+**O teste que prova a decisão:** cotação criada para "Águia Translog" e aceita com tomador
+"Cliente Teste" — confirmado por SQL que `Quote.partyId` ≠ `Order.tomadorId` na mesma
+operação. Se os dois conceitos tivessem se fundido, isso seria impossível.
+
+O seletor e o modal da D-052 foram reaproveitados **sem nada novo**, o que é a evidência de
+que o genérico daquela unidade nasceu certo. `Esc` antes de criar preserva UF, margem e
+linha de custo. Cabe em 1366×768 com o campo novo.
+
+### Armadilha de diagnóstico, registrada porque vai repetir
+
+A execução contou `Quote` pela role `mash_app` sem tenant no contexto, o RLS zerou a
+contagem, e ela quase relatou "banco de desenvolvimento perdido". Recontou pela `mash_owner`
+e **relatou o próprio erro** em vez de escondê-lo.
+
+Nada foi perdido. É o RLS funcionando como deve: sem tenant no contexto, não há linha
+visível. Fica escrito porque a conclusão errada é intuitiva, e a verificação de "o banco de
+dev está intacto?" virou rotina depois da D-050 — **essa verificação precisa rodar como
+`mash_owner`, ou ela mente.**
+
+## D-054 · Lista de cotações: a primeira tela de chegada
+
+**Status:** Fechada · primeiro uso real do TanStack Table (D-021, nunca exercitado até aqui)
+· corrige uma afirmação errada da D-051 (ver fim)
+
+**Por quê:** era o que a D-053 vinha destravando. Sem lista, o operador perdia a cotação ao
+fechar o navegador — só chegava nela pela URL que ainda estivesse aberta. E o follow-up de
+expirada, que foi a razão de a D-046 separar expirada de recusada, não tinha onde acontecer.
+
+É também a **primeira tela em que o operador chega sem saber o que quer.** Todas as
+anteriores ele abria com um objetivo. Isso muda o que importa: busca, filtro e densidade
+passam a ser o produto, não enfeite.
+
+### A visão padrão responde uma pergunta, não mostra tudo
+
+Ao abrir: **as fechadas ainda válidas, ordenadas por validade mais próxima.** Não a lista
+completa por data de criação.
+
+A pergunta que a tela responde primeiro é "o que está esperando resposta e vai vencer?". É
+exatamente para isso que a D-046 separou expirada de recusada, e listar por data de criação
+desperdiçaria a distinção. Vencidas aparecem visualmente distintas — é ação perdida, não
+item neutro.
+
+*(Premissa a confirmar com o operador: assumi que a primeira pergunta da manhã é "o que
+espera resposta". Pode ser "o que eu cotei hoje" — se for, é trocar a ordenação padrão,
+barato.)*
+
+**Expirada continua derivada, nunca gravada** (D-046). `CLOSED_EXPIRED` existe só como valor
+de filtro, traduzido na consulta em `statusId = CLOSED AND validUntil < agora`; o
+`isExpired` de cada linha reaproveita `isQuoteValidityExpired` de `@mash/shared`, a mesma
+função de `GET /quotes/:id`. Nenhum status novo, nenhum job periódico.
+
+### Servidor faz o trabalho
+
+Filtro, busca e paginação **no servidor**, porque o operador faz milhares de cotações por
+ano e a lista cresce indefinidamente. Paginação por página e contagem, não por cursor —
+nessa escala o `OFFSET` não pesa, e integra direto com o `manualPagination` do TanStack
+Table.
+
+Busca por nome de cliente via trigram, mesmo padrão da D-038 (`Party_name_trgm_idx`, GIN).
+Índice `[tenantId, statusId, validUntil]` para a ordenação da visão padrão, na mesma
+migração.
+
+**Estado do filtro vive na URL** (D-049): o operador copia o link, manda para o colega, abre
+duas abas, volta no histórico e cai onde estava — com filtro e página preservados. É o que a
+planilha não faz.
+
+### `Ctrl+K` passou a buscar entidade
+
+A D-048 decidiu que o `Ctrl+K` busca entidade e não só tela; a D-049 deixou só navegação
+porque não havia endpoint. Agora há, e a paleta usa **o mesmo endpoint da lista** — sem rota
+paralela para manter em sincronia.
+
+### Densidade: 14 linhas
+
+Medido, não estimado: **14 linhas em 1366×768**, com 506px úteis a 36px por linha. Cabeçalho,
+filtros e paginação ficam fixos; só a área de linhas rola.
+
+**Foco inicial no container da tabela, não na busca.** As setas varrem a lista e servem quem
+chega sem objetivo, que é o caso desta tela; um campo de texto só ajuda quem já sabe o nome
+do cliente. Setas navegam, `Enter` abre, voltar preserva filtro e posição.
+
+**TanStack Table fixado em v8**, não v9. A v9 reescreveu a API e mantém a conhecida atrás de
+um import explicitamente marcado como legado — começar o primeiro uso real da biblioteca já
+pelo caminho legado não faz sentido.
+
+`formatDate` e `STATUS_TONE_CLASS` saíram de dentro da tela de detalhe para uso
+compartilhado, no segundo uso real e não antes.
+
+`/` deixou de ser placeholder e virou a própria lista, em vez de rota nova com
+redirecionamento.
+
+### Verificação
+
+`shared` 122 → **129**, backend 377 → **390** (20 unitários + 370 e2e, 13 testes novos de
+listagem), frontend 6. Builds e lint limpos.
+
+No navegador, com teclado: 35 cotações nos cinco estados em duas páginas, setas e `Enter`
+funcionando, filtro por estado e por cliente conferidos, busca por trigram correta,
+paginação 20+5 sem duplicar, `Ctrl+K` achando e navegando. Banco de desenvolvimento intacto,
+contado como `mash_owner` — a verificação correta desde o achado da D-053.
+
+### Defeito da casca, encontrado aqui
+
+`AppLayout` usava `min-h-screen` e a tela inteira rolava junto com a sidebar. Corrigido para
+`h-screen` com `overflow-hidden` no conteúdo.
+
+Não apareceu antes porque nenhuma tela tinha conteúdo suficiente para transbordar.
+**Consequência a registrar:** as medições de 1366×768 das D-050, D-051 e D-052 foram feitas
+com esse comportamento, então "cabe sem rolar" pode ter sido medida frouxa naquelas telas.
+Vale reconferir uma delas ao passar por lá — não é urgente, mas a métrica de densidade perde
+sentido se o critério variou.
+
+### Correção da D-051
+
+A D-051 afirma que `GET /parties` e `GET /branches` foram entregues com "formato de resposta
+que comporta paginação depois sem virar mudança de contrato". **Não é verdade** — eles
+devolvem array cru na raiz. Foi leitura errada minha do relatório da época.
+
+O formato `{ items, total, page, pageSize }` foi projetado nesta unidade, do zero, e vale só
+para `GET /quotes`. **`GET /parties` e `GET /branches` continuam com array cru**, e virar
+paginado neles ainda será mudança de contrato — pendência registrada.
+
+## D-055 · Permissão é grupo configurável, não papel no código
+
+**Status:** Fechada · tela de gerenciar grupos e usuários pendente · alçada por valor e
+permissão por filial deliberadamente fora (assento reservado, ver abaixo)
+
+**Por quê:** o sistema não distinguia usuários. Isso bloqueava a configuração do tenant
+(prazo padrão de cotação), que precisava ser do gestor e não do operador — e bloquearia
+dashboard e visibilidade financeira depois.
+
+O receio era concreto e foi dito assim: **medo de ter que editar o sistema para cada
+transportadora.** É a mesma armadilha do formulário genérico que a D-048 recusou, agora na
+camada de acesso.
+
+### A pesquisa respondeu: ninguém fixa papel no código
+
+ESL Cloud (concorrente direto) e Senior, os dois consultados:
+
+- Os menus apresentados ao usuário são determinados pelo **grupo de acesso** ao qual ele
+  pertence, e o sistema já vem com **sete grupos previamente cadastrados, que podem ser
+  alterados, excluídos ou duplicados**.
+- No cadastro define-se se o usuário terá **acesso administrativo** — administradores têm
+  permissão total, independentemente do grupo vinculado.
+- Na Senior, a permissão é **por função, organizada por módulo**, e alterar um grupo afeta
+  todos os usuários vinculados a ele.
+
+Ou seja: usuário → grupo → permissões, com grupos semeados que cada transportadora edita.
+**Elas configuram sozinhas; ninguém edita código por cliente.** É o mesmo padrão da D-020,
+aplicado a acesso.
+
+### O modelo
+
+`Permission` global (tabela de domínio, D-020, código em inglês e rótulo em português),
+`Group` por tenant, `GroupPermission`, e `User.groupId` / `User.isAdmin`.
+
+**Grupo é por tenant, não global**, e a justificativa é a que define a decisão: se os grupos
+fossem linhas compartilhadas, editar o "Operador" de uma transportadora mudaria o de todas
+ao mesmo tempo. `QuoteStatus` e `DayPeriod` são globais justamente porque **nunca** são
+editados pelo tenant — `Group` é o oposto, existe para ser editado. Semeados por
+`seedDefaultGroups()` dentro da criação do tenant, mesma transação da filial padrão.
+
+Nove permissões, todas derivadas de endpoint que já existe:
+
+- **Cotação:** `quote.view`, `quote.create`, `quote.close`, `quote.accept`, `quote.reject` —
+  os cinco verbos do ciclo de vida (D-046, D-051)
+- **Cadastro:** `registration.view`, `registration.create` — `Party` e `Branch` como um
+  domínio só
+- **Configuração:** `settings.view`, `settings.change` — **sem endpoint ainda**, semeadas
+  agora para a próxima unidade nascer protegida em vez de ganhar proteção depois
+
+Dois grupos semeados, gestor e operador, e ninguém é obrigado a usá-los.
+
+**Marcador de administrador que ignora o grupo**, como nos dois TMS pesquisados. Evita a
+transportadora se trancar para fora.
+
+### Endpoint sem permissão declarada é erro de programação, não passe livre
+
+A parte que mais importava. O `PermissionGuard` **lança exceção** se a rota não tiver nenhum
+dos três marcadores (`@Public()`, `@RequirePermission()`, `@NoPermissionRequired()`).
+
+**Alternativa recusada: negar por padrão silenciosamente.** Negar é seguro mas invisível —
+quem esquecer o marcador descobre por um 403 misterioso. Estourar erro de programação faz o
+desenvolvedor descobrir na primeira chamada. É a única versão que sobrevive ao esquecimento
+daqui a seis meses.
+
+Segundo `APP_GUARD`, depois do de tenant. A resolução de `isAdmin` e permissões acontece na
+**mesma consulta** que já validava a sessão (D-049) — sem ida extra ao banco por requisição.
+
+**A guarda é sempre no servidor.** A casca esconde item de menu e ação, mas isso é
+conveniência: esconder, não desabilitar, porque botão desabilitado sem explicação irrita
+mais que ausência. `GET /me` passou a devolver as permissões efetivas.
+
+Reaproveitamentos que precisam estar escritos, porque não são óbvios:
+`GET /quote-cost-types` e `GET /tax-rates/quote-preview` exigem `quote.create` (são
+auxiliares do formulário, não telas próprias); `GET /parties/cnpj/:cnpj` exige
+`registration.create`; o PDF da ordem de coleta usa `quote.view`. **Se um dia existir tela
+de alíquotas, ela precisa de permissão própria** — a reutilização atual vai confundir.
+
+`GET /me`, `GET /me/users` e o logout são `@NoPermissionRequired()`: identidade, não
+capacidade de negócio.
+
+### Fora de propósito, com assento reservado
+
+**Permissão por filial.** A Senior escopa função por filial, e o Mash tem `Branch`. Não
+construído: uma unidade, duas pessoas. O modelo comporta acrescentar sem remodelar, porque
+os eixos já são ortogonais — a D-009 diz que papel define o que se pode fazer e tenant
+define quais dados existem, e nunca se misturam. Filial seria um terceiro eixo do mesmo
+jeito.
+
+**Alçada por valor.** Na ESL, define-se um valor máximo para autoaprovação, e a cotação que
+excede vai para aprovação. Não é permissão de tela nem de ação — é permissão **de quanto**,
+e resolve "operador dando desconto demais", que a D-046 tocou ao falar de medir margem
+cedida. É a coisa mais vendável que a pesquisa revelou. Fica como pendência, não como v1.
+
+### Migração de dados: preservar, não restringir
+
+**Usuários pré-existentes viraram administradores.** A alternativa seria reduzir a zero o
+acesso irrestrito que já tinham. Numa migração de permissão o padrão seguro é preservar:
+restringir em massa trava a operação sem aviso, e quem tem o acesso pode reduzi-lo depois —
+o contrário exige alguém com acesso, que pode não existir mais.
+
+Os seis tenants existentes ganharam grupos por script (`backfill-tenant-groups.mjs`), fora
+da migração, porque a D-015 barra `gen_random_uuid()` no SQL — UUID v7 é gerado em
+TypeScript.
+
+### Verificação
+
+`shared` 129 (inalterado), backend 390 → **418** (27 unitários + 391 e2e), frontend 6.
+Builds e lint limpos. Banco de desenvolvimento intacto, contado como `mash_owner`.
+
+No navegador: operador sem "Configuração" na sidebar, gestor com. **Recusa real do backend
+provada por HTTP** — 403 para usuário sem grupo, não só item escondido na tela.
+
+**Lacuna declarada, não escondida:** a cobertura de "endpoint sem marcador é barrado" ficou
+só no teste unitário do guard. Como os 18 endpoints reais foram decorados nesta mesma
+unidade, não sobrou rota indefesa para provar por HTTP sem criar um controller só para o
+teste. A execução relatou isso como não verificado em vez de fingir cobertura.
+
+### Achado: `User.role` inerte
+
+`User.role` / `UserRole` existem no schema, **nunca foram lidos por nenhuma autorização**, e
+agora convivem com o modelo novo. Campo inerte que parece significar algo é pior que campo
+ausente — alguém vai ler dali um dia. Não removido porque tocaria ~8 arquivos de teste por
+um campo morto, fora do escopo. Vira pendência.
+
+## D-056 · "Não vence" é escolha explícita, nunca omissão
+
+**Status:** Fechada · fecha a pendência do prazo obrigatório aberta desde a D-046 · primeira
+configuração de tenant do sistema
+
+**Por quê:** `close()` aceitava prazo omitido, e cotação sem prazo nunca expira. Quem
+esquecesse não recebia erro — recebia uma cotação imortal, aceitável meses depois com preço
+de meses atrás. É o **padrão inseguro silencioso** registrado na D-046, e a pior forma de
+falha: invisível.
+
+A D-051 tinha fechado metade, tornando o prazo obrigatório na tela. Mas a tela não é a
+regra: script, integração ou qualquer outro caminho reabria o buraco.
+
+**Evidência de que não era hipotético: 11 chamadas a `close()` omitiam prazo.** Cada uma
+seria uma cotação eterna sem ninguém ter decidido isso.
+
+### A decisão central
+
+Cotação que não vence **pode existir** — o sócio confirmou que faz sentido no negócio dele.
+O que deixa de existir é criá-la **sem querer**.
+
+`QuoteValidityDecision`, com dois casos: prazo, ou `NEVER` explícito. `close()` exige a
+decisão; omitir é erro.
+
+**Alternativa recusada: proibir cotação sem prazo.** Foi minha recomendação inicial, e o
+sócio a derrubou com um caso real. O buraco nunca foi permitir a cotação eterna — era
+produzi-la por silêncio.
+
+**Alternativa recusada: padrão de fábrica (sete dias) quando o tenant não configura.** Se a
+transportadora não decidiu, o sistema não decide por ela: o operador digita toda vez. Um
+padrão inventado por mim seria a mesma omissão disfarçada, só que com um número plausível
+por cima.
+
+### Configuração do tenant, a primeira
+
+`TenantSettings`, **1:1 preguiçosa** — tenant sem configuração não ganha linha à toa —, com
+`CHECK` de forma e RLS no padrão de isolamento (D-012/D-035). Estrutura pensada para outras
+configurações virem, mas **nenhuma outra construída**.
+
+Atrás de `settings.view` e `settings.change`, as permissões que a D-055 semeou exatamente
+para isto, com guarda no backend e não só na tela.
+
+**`GET /me` devolve o padrão sem exigir `settings.view`.** O operador precisa do
+preenchimento automático mesmo sem poder configurar — permissão de *alterar* não é permissão
+de *usar o resultado*.
+
+Na cotação, o padrão vem preenchido e **é sempre editável naquela cotação**: padrão é
+sugestão, não trava.
+
+### Ano no cálculo
+
+`computeQuoteValidUntil` passou a aceitar anos. **1 ano é 12 meses, com a mesma regra de
+grudar no último dia do mês** — testado com 29/02, que sem a regra viraria data inexistente.
+Função pura em `@mash/shared`, data de referência por parâmetro, nunca lê o relógio (padrão
+da D-045/D-046).
+
+### O nulo que quase engoliu a linha
+
+A lista da D-054 derivava vencido de `statusId = CLOSED AND validUntil < agora`. Com
+`validUntil` nulo, a comparação não é falsa — é nula, e a cotação sem prazo sumiria das duas
+visões sem aparecer em lugar nenhum.
+
+Resolvido redefinindo `CLOSED` para excluir nulo e criando `CLOSED_NO_EXPIRY` como caso
+próprio. **Três casos distinguíveis:** válida, vencida, sem prazo.
+
+Confirmado no navegador: a cotação sem prazo mostra "Fechada — sem prazo", aparece sob o
+filtro "Sem prazo", e **não** na visão padrão nem em "vencida". Não some.
+
+### Verificação
+
+`shared` 129 → **139**, backend 418 → **427**, frontend 6. Commit `435fc1f`.
+
+Os três cenários percorridos no navegador: tenant sem configuração (campo vazio, digita na
+hora), tenant com padrão de 15 dias (chega preenchido, editado para 20, fechou com a data
+correta), tenant com "não vence".
+
+**11 chamadas a `close()` precisaram de decisão explícita** por omitirem prazo; outras 9
+foram só o rename de `validityTerm` para `validity`. A execução separou as duas coisas em
+vez de somar num número que pareceria pior — as 9 são mecânicas, as 11 eram o problema.
+
+Banco de desenvolvimento intacto, contado como `mash_owner` (D-053).
 
 ## Pendências
 
@@ -2850,9 +3679,11 @@ sem tela é código não exercitado que parece pronto.
       colocar isso, e usando o campo de data como gambiarra. Não muda a D-037 em si, só
       reforça que o campo certo (`Trip.sequence`) já existe e o problema é a UI/processo
       não ter dado ao operador um lugar pra registrar isso desde o início.
-- [ ] **Prazo limite da carga não tem campo — nem `Order`, nem `Trip`.** É o dado que
-      define o prazo de emissão do CT-e (precisa emitir antes do prazo vencer), e hoje
-      não existe em lugar nenhum do modelo.
+- [x] **Prazo de validade obrigatório — resolvido, D-056.** `close()` exige decisão
+      explícita: prazo, ou "não vence" de propósito. Omitir é erro. Padrão configurável por
+      tenant, sempre editável na cotação; sem configuração, o operador digita toda vez —
+      nenhum padrão de fábrica inventado. Cotação sem prazo é caso próprio na lista, nem
+      válida nem vencida. 11 chamadas omitiam prazo de verdade.
 - [ ] **Faturamento em `Order` com transbordo (D-037): confirmar se fica pronto pra
       faturar com canhoto de TODAS as pernas, ou só da última.** D-042 já decidiu que o
       canhoto ancora em `Trip`, não em `Order` (prova de entrega é evento por perna) —
@@ -2895,10 +3726,10 @@ sem tela é código não exercitado que parece pronto.
 - [ ] **Caminho de criação de revisão/recotação (D-046).** `Quote.previousQuoteId` existe no
       schema, mas `create()`/`createCostBased()` não aceitam — só dá pra preencher indo
       direto ao banco. Pré-requisito do botão "copiar desta" na tela de cotação.
-- [ ] **Cotação por custo não tem vínculo nenhum com cliente (D-047).** Sem isso não há
-      lista de cotações nem follow-up de expirada — e follow-up era exatamente a razão de
-      separar expirada de recusada na D-046: a métrica existe e fica inútil se não dá pra
-      saber pra quem ligar. Antes da tela de cotações, não depois.
+- [x] **Cotação sem vínculo com cliente — resolvida, D-053.** `Quote.partyId` NOT NULL,
+      quem pediu a cotação. Um campo só: tomador/remetente/destinatário continuam entrando
+      no aceite (D-047), porque quem paga só se sabe quando a operação se monta. Destrava
+      lista de cotações e follow-up de expirada.
 - [ ] **`Order.total` vs `Trip.price` no caminho CUSTO (D-047).** Mesmo número em dois
       lugares que podem divergir, e o nome mente (`total` guarda preço unitário). Decide-se
       checando o que o faturamento (D-042) lê: se soma as `Trip`, `Order.total` vira
@@ -2923,6 +3754,44 @@ sem tela é código não exercitado que parece pronto.
 - [ ] **Concorrência otimista (coluna `version`, D-048).** Legítimo em geral, recusado por
       ora: a operação tem duas pessoas, dois operadores editando a mesma cotação ao mesmo
       tempo ainda não é cenário real. Registrado pra não ser redecidido, não pra construir.
+- [ ] **Releitura da autenticação por sessão (D-049).** `Session`, login/logout por cookie,
+      `GET /me` e CSRF por `Origin` foram construídos no meio da unidade da casca, com limite de
+      sessão acabando, porque o backend estava com JWT no cabeçalho e a D-048 já tinha decidido
+      cookie + sessão opaca. Foi a escolha certa, mas é camada 1 decidida de passagem, e sessão
+      é onde o RLS se apoia. Reler com calma antes da v1.
+- [x] **Banco de teste separado — resolvido (D-050).** `mash_test` no mesmo cluster, com as
+      mesmas roles e `GRANT`s verificados idênticos (44 grants de coluna em `Quote`), e suíte
+      que recusa rodar sem `.env.test` ou apontando pro banco de dev. Confirmado depois que o
+      dano já era real, não hipotético: `OrderStatus`/`TripStatus` estavam vazios no banco de
+      desenvolvimento, apagados pela suíte, bloqueando `accept()` de verdade (D-051).
+- [ ] **Exception filter global no backend (D-050).** Não existe nenhum hoje; cada endpoint
+      repete o padrão `BadRequestException(zod.flatten())` do login pra produzir o
+      `{fieldErrors, formErrors}` que a casca espera. Construir mudaria o formato de erro de
+      tudo que já tem teste (343) — recusado por ora, registrado pra não ser redecidido.
+- [ ] **Tela de cadastro completa de `Party` (D-052).** O modal do fluxo cria com CNPJ e razão
+      social apenas — a parte nasce incompleta por decisão, e hoje não existe onde corrigir ou
+      completar. Endereço só vem se a consulta de CNPJ trouxer inteiro; parcial é descartado.
+      Próxima unidade.
+- [ ] **`GET /parties` e `GET /branches` devolvem array cru (D-054, corrige D-051).** Virar
+      paginado neles ainda é mudança de contrato. O formato `{items, total, page, pageSize}`
+      foi projetado na D-054 e vale só pra `GET /quotes`. Alinhar quando o cadastro crescer.
+- [ ] **Reconferir densidade das telas D-050 a D-052 (D-054).** Foram medidas em 1366×768 com
+      o `AppLayout` rolando a tela inteira (`min-h-screen`, corrigido na D-054). "Cabe sem
+      rolar" pode ter sido medida frouxa. Não é urgente; reconferir ao passar por lá.
+- [ ] **Tela de gerenciar grupos e usuários (D-055).** O modelo existe e os dois grupos
+      semeados funcionam, mas a transportadora ainda não consegue alterar, duplicar ou criar
+      grupo — que é o ponto inteiro de não fixar papel no código. Sem isso, o Mash tem a
+      arquitetura certa e o comportamento de papel fixo. É a mais urgente das quatro da D-055.
+- [ ] **Alçada por valor na cotação (D-055).** Valor máximo de autoaprovação por grupo; acima
+      disso a cotação vai pra aprovação de quem tem permissão. Padrão da ESL Cloud, e a coisa
+      mais vendável que a pesquisa de concorrentes revelou — resolve "operador dando desconto
+      demais", que a D-046 tocou ao falar de medir margem cedida. Não é v1.
+- [ ] **Permissão por filial (D-055).** A Senior escopa função por filial e o Mash tem
+      `Branch`. Assento reservado: os eixos já são ortogonais (D-009), acrescentar não exige
+      remodelar. Só faz sentido com mais de uma unidade.
+- [ ] **`User.role` inerte (D-055).** Existe no schema, nunca foi lido por autorização nenhuma,
+      e agora convive com `Group`/`Permission`. Campo morto que parece significar algo.
+      Remover toca ~8 arquivos de teste.
 ### A observar no operacional
 - [ ] Coletar **todas as planilhas paralelas**, com dados reais dentro
 - [ ] Como a apólice de seguro restringe tipos de carga, e se isso precisa estar no
